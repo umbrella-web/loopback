@@ -5,6 +5,7 @@ var memory = loopback.createDataSource({
   connector: loopback.Memory
 });
 
+server.use(loopback.context());
 server.use(loopback.rest());
 server.model(CartItem);
 
