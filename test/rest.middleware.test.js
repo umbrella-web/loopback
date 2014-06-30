@@ -93,6 +93,14 @@ describe('loopback.rest', function() {
     User.getToken = function(cb) {
       var context = loopback.getCurrentContext();
       var req = context.get('req');
+      expect(req).to.have.property('accessToken');
+
+      var juggler = require('loopback-datasource-juggler');
+      expect(juggler.getCurrentContext().get('req')).to.have.property('accessToken');
+
+      var remoting = require('strong-remoting');
+      expect(remoting.getCurrentContext().get('req')).to.have.property('accessToken');
+
       cb(null, req && req.accessToken ? req.accessToken.id : null);
     };
     // Set up the ACL
