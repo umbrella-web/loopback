@@ -18,7 +18,7 @@ CartItem.sum = function(cartId, callback) {
         return prev + cur;
       }, 0);
 
-    var ns = loopback.context.getCurrent();
+    var ns = loopback.getCurrentContext();
     console.log(ns.get('req').url);
     callback(null, total);
   });

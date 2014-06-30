@@ -91,7 +91,8 @@ describe('loopback.rest', function() {
   it('should pass req to remote method via context', function(done) {
     var User = givenUserModelWithAuth();
     User.getToken = function(cb) {
-      var req = process.context && process.context.get('req');
+      var context = loopback.getCurrentContext();
+      var req = context.get('req');
       cb(null, req && req.accessToken ? req.accessToken.id : null);
     };
     // Set up the ACL
