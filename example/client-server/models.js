@@ -19,7 +19,7 @@ CartItem.sum = function(cartId, callback) {
       }, 0);
 
     var ns = loopback.getCurrentContext();
-    console.log(ns.get('req').url);
+    console.log(ns.get('http').req.url);
     callback(null, total);
   });
 }

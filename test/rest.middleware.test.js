@@ -92,14 +92,16 @@ describe('loopback.rest', function() {
     var User = givenUserModelWithAuth();
     User.getToken = function(cb) {
       var context = loopback.getCurrentContext();
-      var req = context.get('req');
+      var req = context.get('http').req;
       expect(req).to.have.property('accessToken');
 
       var juggler = require('loopback-datasource-juggler');
-      expect(juggler.getCurrentContext().get('req')).to.have.property('accessToken');
+      expect(juggler.getCurrentContext().get('http').req)
+        .to.have.property('accessToken');
 
       var remoting = require('strong-remoting');
-      expect(remoting.getCurrentContext().get('req')).to.have.property('accessToken');
+      expect(remoting.getCurrentContext().get('http').req)
+        .to.have.property('accessToken');
 
       cb(null, req && req.accessToken ? req.accessToken.id : null);
     };
