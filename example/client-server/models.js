@@ -19,7 +19,9 @@ CartItem.sum = function(cartId, callback) {
       }, 0);
 
     var ns = loopback.getCurrentContext();
-    console.log(ns.get('http').req.url);
+    if (ns && ns.get('http')) {
+      console.log('Remote call via url: %s', ns.get('http').req.url);
+    }
     callback(null, total);
   });
 }

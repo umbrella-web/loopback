@@ -114,7 +114,7 @@ describe('loopback.rest', function() {
       returns: [{ type: 'object', name: 'id' }]
     });
 
-    app.use(loopback.context());
+    app.use(loopback.context({enableHttpContext: true}));
     app.enableAuth();
     app.use(loopback.rest());
 
