@@ -53,7 +53,11 @@ User.prototype.createAccessToken = function(ttl, cb) {
   var userModel = this.constructor;
   ttl = Math.min(ttl || userModel.settings.ttl, userModel.settings.maxTTL);
   this.accessTokens.create({
-    ttl: ttl
+    ttl: ttl,
+    /* Add model name to identify which user owns token.
+     * It is useful when you have multiple Models, based on User.
+     * Next, register role resolver, to find and check token owner by model name and userId */
+    model: userModel.modelName
   }, cb);
 };
 
