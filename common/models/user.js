@@ -57,7 +57,9 @@ User.prototype.createAccessToken = function(ttl, cb) {
     /* Add model name to identify which user owns token.
      * It is useful when you have multiple Models, based on User.
      * Next, register role resolver, to find and check token owner by model name and userId */
-    model: userModel.modelName
+    model: userModel.modelName,
+    /* if ttl is le than 1 hour this is reset access token */
+    type: ttl <= 3600 ? 'reset' : 'login'
   }, cb);
 };
 
@@ -420,7 +422,7 @@ User.resetPassword = function(options, cb) {
       } else if (user) {
         // create a short lived access token for temp login to change password
         // TODO(ritch) - eventually this should only allow password change
-        user.accessTokens.create({ttl: ttl}, function(err, accessToken) {
+        user.createAccessToken(ttl, function(err, accessToken) {
           if (err) {
             cb(err);
           } else {
