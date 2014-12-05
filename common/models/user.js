@@ -58,8 +58,8 @@ User.prototype.createAccessToken = function(ttl, cb) {
      * It is useful when you have multiple Models, based on User.
      * Next, register role resolver, to find and check token owner by model name and userId */
     model: userModel.modelName,
-    /* if ttl is le than 1 hour this is reset access token */
-    type: ttl <= 3600 ? 'reset' : 'login'
+    /* if ttl is le than 1 day this is reset password token */
+    type: ttl <= 43200 ? 'reset' : 'login'
   }, cb);
 };
 
@@ -457,7 +457,7 @@ User.setup = function() {
 
   // max ttl
   this.settings.maxTTL = this.settings.maxTTL || DEFAULT_MAX_TTL;
-  this.settings.ttl = DEFAULT_TTL;
+  this.settings.ttl = this.settings.loginAccessTokenTTL || DEFAULT_TTL;
 
   UserModel.setter.password = function(plain) {
     var salt = bcrypt.genSaltSync(this.constructor.settings.saltWorkFactor || SALT_WORK_FACTOR);
