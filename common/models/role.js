@@ -159,26 +159,41 @@ module.exports = function(Role) {
       var ownerId = inst.userId || inst.owner;
       if (ownerId) {
         callback && callback(null, matches(ownerId, userId));
-        return;
       } else {
         // Try to follow belongsTo
-        for (var r in modelClass.relations) {
-          var rel = modelClass.relations[r];
-          if (rel.type === 'belongsTo' && isUserClass(rel.modelTo)) {
-            debug('Checking relation %s to %s: %j', r, rel.modelTo.modelName, rel);
-            inst[r](function(err, user) {
-              if (!err && user) {
-                debug('User found: %j', user.id);
-                callback && callback(null, matches(user.id, userId));
-              } else {
-                callback && callback(err, false);
-              }
-            });
-            return;
+        if (Object.keys(modelClass.relations).length) {
+          var asyncTasks = [];
+          for (var r in modelClass.relations) {
+            var rel = modelClass.relations[r];
+            if (rel.type === 'belongsTo' && isUserClass(rel.modelTo)) {
+              debug('Checking relation %s to %s: %j', r, rel.modelTo.modelName, rel);
+              asyncTasks.push(
+                (function(relName) {
+                  return function(cb) {
+                    inst[relName](function(err, user) {
+                      if (!err && user) {
+                        debug('User found: %j', user.id);
+                        cb(null, matches(user.id, userId));
+                      } else {
+                        cb(err, false);
+                      }
+                    });
+                  }
+                })(r)
+              )
+            }
           }
+          async.parallel(asyncTasks, function(err, results) {
+            async.some(results, function(item, cb){
+              cb(item)
+            }, function(final) {
+              callback && callback(null, final)
+            })
+          })
+        } else {
+          debug('No matching belongsTo relation found for model %j and user: %j', modelId, userId);
+          callback && callback(null, false);
         }
-        debug('No matching belongsTo relation found for model %j and user: %j', modelId, userId);
-        callback && callback(null, false);
       }
     });
   };
