@@ -435,7 +435,9 @@ User.resetPassword = function(options, cb) {
           }
         })
       } else {
-        cb();
+        var err = new Error('email is invalid');
+        err.statusCode = 400;
+        cb(err);
       }
     });
   } else {
