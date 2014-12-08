@@ -147,6 +147,7 @@ module.exports = function(AccessToken) {
       var isValid = elapsedSeconds < secondsToLive;
 
       if (isValid) {
+        this.updateAttribute('created', new Date()); // refresh token
         cb(null, isValid);
       } else {
         this.destroy(function(err) {
