@@ -1,5 +1,9 @@
+/*jshint -W030 */
+
+var async = require('async');
 var path = require('path');
-var SIMPLE_APP = path.join(__dirname, 'fixtures', 'simple-app');
+
+var http = require('http');
 var loopback = require('../');
 var PersistedModel = loopback.PersistedModel;
 
@@ -7,15 +11,310 @@ var describe = require('./util/describe');
 var it = require('./util/it');
 
 describe('app', function() {
+  describe.onServer('.middleware(phase, handler)', function() {
+    var app;
+    var steps;
+
+    beforeEach(function setup() {
+      app = loopback();
+      steps = [];
+    });
+
+    it('runs middleware in phases', function(done) {
+      var PHASES = [
+        'initial', 'session', 'auth', 'parse',
+        'routes', 'files', 'final'
+      ];
+
+      PHASES.forEach(function(name) {
+        app.middleware(name, namedHandler(name));
+      });
+      app.use(namedHandler('main'));
+
+      executeMiddlewareHandlers(app, function(err) {
+        if (err) return done(err);
+        expect(steps).to.eql([
+          'initial', 'session', 'auth', 'parse',
+          'main', 'routes', 'files', 'final'
+        ]);
+        done();
+      });
+    });
+
+    it('supports `before:` and `after:` prefixes', function(done) {
+      app.middleware('routes:before', namedHandler('routes:before'));
+      app.middleware('routes:after', namedHandler('routes:after'));
+      app.use(namedHandler('main'));
+
+      executeMiddlewareHandlers(app, function(err) {
+        if (err) return done(err);
+        expect(steps).to.eql(['routes:before', 'main', 'routes:after']);
+        done();
+      });
+    });
+
+    it('injects error from previous phases into the router', function(done) {
+      var expectedError = new Error('expected error');
+
+      app.middleware('initial', function(req, res, next) {
+        steps.push('initial');
+        next(expectedError);
+      });
+
+      // legacy solution for error handling
+      app.use(function errorHandler(err, req, res, next) {
+        expect(err).to.equal(expectedError);
+        steps.push('error');
+        next();
+      });
+
+      executeMiddlewareHandlers(app, function(err) {
+        if (err) return done(err);
+        expect(steps).to.eql(['initial', 'error']);
+        done();
+      });
+    });
+
+    it('passes unhandled error to callback', function(done) {
+      var expectedError = new Error('expected error');
+
+      app.middleware('initial', function(req, res, next) {
+        next(expectedError);
+      });
+
+      executeMiddlewareHandlers(app, function(err) {
+        expect(err).to.equal(expectedError);
+        done();
+      });
+    });
+
+    it('passes errors to error handlers in the same phase', function(done) {
+      var expectedError = new Error('this should be handled by middleware');
+      var handledError;
+
+      app.middleware('initial', function(req, res, next) {
+        // continue in the next tick, this verifies that the next
+        // handler waits until the previous one is done
+        process.nextTick(function() {
+          next(expectedError);
+        });
+      });
+
+      app.middleware('initial', function(err, req, res, next) {
+        handledError = err;
+        next();
+      });
+
+      executeMiddlewareHandlers(app, function(err) {
+        if (err) return done(err);
+        expect(handledError).to.equal(expectedError);
+        done();
+      });
+    });
+
+    it('scopes middleware to a string path', function(done) {
+      app.middleware('initial', '/scope', pathSavingHandler());
+
+      async.eachSeries(
+        ['/', '/scope', '/scope/item', '/other'],
+        function(url, next) { executeMiddlewareHandlers(app, url, next); },
+        function(err) {
+          if (err) return done(err);
+          expect(steps).to.eql(['/scope', '/scope/item']);
+          done();
+        });
+    });
+
+    it('scopes middleware to a regex path', function(done) {
+      app.middleware('initial', /^\/(a|b)/, pathSavingHandler());
+
+      async.eachSeries(
+        ['/', '/a', '/b', '/c'],
+        function(url, next) { executeMiddlewareHandlers(app, url, next); },
+        function(err) {
+          if (err) return done(err);
+          expect(steps).to.eql(['/a', '/b']);
+          done();
+        });
+    });
+
+    it('scopes middleware to a list of scopes', function(done) {
+      app.middleware('initial', ['/scope', /^\/(a|b)/], pathSavingHandler());
+
+      async.eachSeries(
+        ['/', '/a', '/b', '/c', '/scope', '/other'],
+        function(url, next) { executeMiddlewareHandlers(app, url, next); },
+        function(err) {
+          if (err) return done(err);
+          expect(steps).to.eql(['/a', '/b', '/scope']);
+          done();
+        });
+    });
+
+    function namedHandler(name) {
+      return function(req, res, next) {
+        steps.push(name);
+        next();
+      };
+    }
+
+    function pathSavingHandler() {
+      return function(req, res, next) {
+        steps.push(req.url);
+        next();
+      };
+    }
+  });
+
+  describe.onServer('.middlewareFromConfig', function() {
+    it('provides API for loading middleware from JSON config', function(done) {
+      var steps = [];
+      var expectedConfig = { key: 'value' };
+
+      var handlerFactory = function() {
+        var args = Array.prototype.slice.apply(arguments);
+        return function(req, res, next) {
+          steps.push(args);
+          next();
+        };
+      };
+
+      // Config as an object (single arg)
+      app.middlewareFromConfig(handlerFactory, {
+        enabled: true,
+        phase: 'session',
+        params: expectedConfig
+      });
+
+      // Config as a value (single arg)
+      app.middlewareFromConfig(handlerFactory, {
+        enabled: true,
+        phase: 'session:before',
+        params: 'before'
+      });
+
+      // Config as a list of args
+      app.middlewareFromConfig(handlerFactory, {
+        enabled: true,
+        phase: 'session:after',
+        params: ['after', 2]
+      });
+
+      // Disabled by configuration
+      app.middlewareFromConfig(handlerFactory, {
+        enabled: false,
+        phase: 'initial',
+        params: null
+      });
+
+      executeMiddlewareHandlers(app, function(err) {
+        if (err) return done(err);
+        expect(steps).to.eql([
+          ['before'],
+          [expectedConfig],
+          ['after', 2]
+        ]);
+        done();
+      });
+    });
+
+    it('scopes middleware to a list of scopes', function(done) {
+      var steps = [];
+      app.middlewareFromConfig(
+        function factory() {
+          return function(req, res, next) {
+            steps.push(req.url);
+            next();
+          };
+        },
+        {
+          phase: 'initial',
+          paths: ['/scope', /^\/(a|b)/]
+        });
+
+      async.eachSeries(
+        ['/', '/a', '/b', '/c', '/scope', '/other'],
+        function(url, next) { executeMiddlewareHandlers(app, url, next); },
+        function(err) {
+          if (err) return done(err);
+          expect(steps).to.eql(['/a', '/b', '/scope']);
+          done();
+        });
+    });
+  });
+
+  describe.onServer('.defineMiddlewarePhases(nameOrArray)', function() {
+    var app;
+    beforeEach(function() {
+      app = loopback();
+    });
+
+    it('adds the phase just before `routes` by default', function(done) {
+      app.defineMiddlewarePhases('custom');
+      verifyMiddlewarePhases(['custom', 'routes'], done);
+    });
+
+    it('merges phases adding to the start of the list', function(done) {
+      app.defineMiddlewarePhases(['first', 'routes', 'subapps']);
+      verifyMiddlewarePhases([
+        'first',
+        'initial', // this was the original first phase
+        'routes',
+        'subapps'
+      ], done);
+    });
+
+    it('merges phases preserving the order', function(done) {
+      app.defineMiddlewarePhases([
+        'initial',
+        'postinit', 'preauth', // add
+        'auth', 'routes',
+        'subapps', // add
+        'final',
+        'last' // add
+      ]);
+      verifyMiddlewarePhases([
+        'initial',
+        'postinit', 'preauth', // new
+        'auth', 'routes',
+        'subapps', // new
+        'files', 'final',
+        'last' // new
+      ], done);
+    });
+
+    it('throws helpful error on ordering conflict', function() {
+      app.defineMiddlewarePhases(['first', 'second']);
+      expect(function() { app.defineMiddlewarePhases(['second', 'first']); })
+        .to.throw(/ordering conflict.*first.*second/);
+    });
+
+    function verifyMiddlewarePhases(names, done) {
+      var steps = [];
+      names.forEach(function(it) {
+        app.middleware(it, function(req, res, next) {
+          steps.push(it);
+          next();
+        });
+      });
+
+      executeMiddlewareHandlers(app, function(err) {
+        if (err) return done(err);
+        expect(steps).to.eql(names);
+        done();
+      });
+    }
+  });
 
   describe('app.model(Model)', function() {
-    var app, db;
+    var app;
+    var db;
     beforeEach(function() {
       app = loopback();
       db = loopback.createDataSource({connector: loopback.Memory});
     });
 
-    it("Expose a `Model` to remote clients", function() {
+    it('Expose a `Model` to remote clients', function() {
       var Color = PersistedModel.extend('color', {name: String});
       app.model(Color);
       Color.attachTo(db);
@@ -34,7 +333,7 @@ describe('app', function() {
       var Color = PersistedModel.extend('color', {name: String});
       app.model(Color);
       Color.attachTo(db);
-      var classes = app.remotes().classes().map(function(c) {return c.name});
+      var classes = app.remotes().classes().map(function(c) {return c.name;});
       expect(classes).to.contain('color');
     });
 
@@ -47,7 +346,7 @@ describe('app', function() {
       expect(app.models.Color).to.equal(Color);
     });
 
-    it("emits a `modelRemoted` event", function() {
+    it('emits a `modelRemoted` event', function() {
       var Color = PersistedModel.extend('color', {name: String});
       Color.shared = true;
       var remotedClass;
@@ -80,7 +379,7 @@ describe('app', function() {
 
   });
 
-  describe('app.model(name, config)', function () {
+  describe('app.model(name, config)', function() {
     var app;
 
     beforeEach(function() {
@@ -90,7 +389,7 @@ describe('app', function() {
       });
     });
 
-    it('Sugar for defining a fully built model', function () {
+    it('Sugar for defining a fully built model', function() {
       app.model('foo', {
         dataSource: 'db'
       });
@@ -197,7 +496,7 @@ describe('app', function() {
         .expect(200, done);
     });
 
-    it('updates port on "listening" event', function(done) {
+    it('updates port on `listening` event', function(done) {
       var app = loopback();
       app.set('port', 0);
 
@@ -207,7 +506,7 @@ describe('app', function() {
       });
     });
 
-    it('updates "url" on "listening" event', function(done) {
+    it('updates `url` on `listening` event', function(done) {
       var app = loopback();
       app.set('port', 0);
       app.set('host', undefined);
@@ -263,15 +562,15 @@ describe('app', function() {
     });
   });
 
-  describe.onServer('app.get("/", loopback.status())', function () {
-    it('should return the status of the application', function (done) {
+  describe.onServer('app.get(\'/\', loopback.status())', function() {
+    it('should return the status of the application', function(done) {
       var app = loopback();
       app.get('/', loopback.status());
       request(app)
         .get('/')
         .expect(200)
         .end(function(err, res) {
-          if(err) return done(err);
+          if (err) return done(err);
 
           assert.equal(typeof res.body, 'object');
           assert(res.body.started);
@@ -281,7 +580,7 @@ describe('app', function() {
           var elapsed = Date.now() - Number(new Date(res.body.started));
 
           // elapsed should be a positive number...
-          assert(elapsed > 0);
+          assert(elapsed >= 0);
 
           // less than 100 milliseconds
           assert(elapsed < 100);
@@ -353,7 +652,8 @@ describe('app', function() {
   });
 
   describe('normalizeHttpPath option', function() {
-    var app, db;
+    var app;
+    var db;
     beforeEach(function() {
       app = loopback();
       db = loopback.createDataSource({ connector: loopback.Memory });
@@ -374,3 +674,20 @@ describe('app', function() {
     });
   });
 });
+
+function executeMiddlewareHandlers(app, urlPath, callback) {
+  var server = http.createServer(function(req, res) {
+    app.handle(req, res, callback);
+  });
+
+  if (callback === undefined && typeof urlPath === 'function') {
+    callback = urlPath;
+    urlPath = '/test/url';
+  }
+
+  request(server)
+    .get(urlPath)
+    .end(function(err) {
+      if (err) return callback(err);
+    });
+}

@@ -1,18 +1,19 @@
 var loopback = require('../');
+var extend = require('util')._extend;
 var Token = loopback.AccessToken.extend('MyToken');
 var ACL = loopback.ACL;
 
 describe('loopback.token(options)', function() {
   beforeEach(createTestingToken);
 
-  it('should populate req.token from the query string', function (done) {
+  it('should populate req.token from the query string', function(done) {
     createTestAppAndRequest(this.token, done)
       .get('/?access_token=' + this.token.id)
       .expect(200)
       .end(done);
   });
 
-  it('should populate req.token from an authorization header', function (done) {
+  it('should populate req.token from an authorization header', function(done) {
     createTestAppAndRequest(this.token, done)
       .get('/')
       .set('authorization', this.token.id)
@@ -20,7 +21,7 @@ describe('loopback.token(options)', function() {
       .end(done);
   });
 
-  it('should populate req.token from an X-Access-Token header', function (done) {
+  it('should populate req.token from an X-Access-Token header', function(done) {
     createTestAppAndRequest(this.token, done)
       .get('/')
       .set('X-Access-Token', this.token.id)
@@ -28,9 +29,9 @@ describe('loopback.token(options)', function() {
       .end(done);
   });
 
-  it('should populate req.token from an authorization header with bearer token', function (done) {
+  it('should populate req.token from an authorization header with bearer token', function(done) {
     var token = this.token.id;
-    token = 'Bearer '+ new Buffer(token).toString('base64');
+    token = 'Bearer ' + new Buffer(token).toString('base64');
     createTestAppAndRequest(this.token, done)
       .get('/')
       .set('authorization', this.token.id)
@@ -38,7 +39,7 @@ describe('loopback.token(options)', function() {
       .end(done);
   });
 
-  it('should populate req.token from a secure cookie', function (done) {
+  it('should populate req.token from a secure cookie', function(done) {
     var app = createTestApp(this.token, done);
 
     request(app)
@@ -51,7 +52,7 @@ describe('loopback.token(options)', function() {
       });
   });
 
-  it('should populate req.token from a header or a secure cookie', function (done) {
+  it('should populate req.token from a header or a secure cookie', function(done) {
     var app = createTestApp(this.token, done);
     var id = this.token.id;
     request(app)
@@ -87,31 +88,63 @@ describe('loopback.token(options)', function() {
   });
 });
 
-describe('AccessToken', function () {
+describe('AccessToken', function() {
   beforeEach(createTestingToken);
 
-  it('should auto-generate id', function () {
+  it('should auto-generate id', function() {
     assert(this.token.id);
     assert.equal(this.token.id.length, 64);
   });
 
-  it('should auto-generate created date', function () {
+  it('should auto-generate created date', function() {
     assert(this.token.created);
     assert(Object.prototype.toString.call(this.token.created), '[object Date]');
   });
 
-  it('should be validateable', function (done) {
+  it('should be validateable', function(done) {
     this.token.validate(function(err, isValid) {
       assert(isValid);
       done();
     });
+  });
+
+  describe('.findForRequest()', function() {
+    beforeEach(createTestingToken);
+
+    it('supports two-arg variant with no options', function(done) {
+      var expectedTokenId = this.token.id;
+      var req = mockRequest({
+        headers: { 'authorization': expectedTokenId }
+      });
+
+      Token.findForRequest(req, function(err, token) {
+        if (err) return done(err);
+        expect(token.id).to.eql(expectedTokenId);
+        done();
+      });
+    });
+
+    function mockRequest(opts) {
+      return extend(
+        {
+          method: 'GET',
+          url: '/a-test-path',
+          headers: {},
+          _params: {},
+
+          // express helpers
+          param: function(name) { return this._params[name]; },
+          header: function(name) { return this.headers[name]; }
+        },
+        opts);
+    }
   });
 });
 
 describe('app.enableAuth()', function() {
   beforeEach(createTestingToken);
 
-  it('prevents remote call with 401 status on denied ACL', function (done) {
+  it('prevents remote call with 401 status on denied ACL', function(done) {
     createTestAppAndRequest(this.token, done)
       .del('/tests/123')
       .expect(401)
@@ -119,7 +152,7 @@ describe('app.enableAuth()', function() {
       .end(done);
   });
 
-  it('prevent remote call with app setting status on denied ACL', function (done) {
+  it('prevent remote call with app setting status on denied ACL', function(done) {
     createTestAppAndRequest(this.token, {app:{aclErrorStatus:403}}, done)
       .del('/tests/123')
       .expect(403)
@@ -127,7 +160,7 @@ describe('app.enableAuth()', function() {
       .end(done);
   });
 
-  it('prevent remote call with app setting status on denied ACL', function (done) {
+  it('prevent remote call with app setting status on denied ACL', function(done) {
     createTestAppAndRequest(this.token, {model:{aclErrorStatus:404}}, done)
       .del('/tests/123')
       .expect(404)
@@ -135,7 +168,7 @@ describe('app.enableAuth()', function() {
       .end(done);
   });
 
-  it('prevent remote call if the accessToken is missing and required', function (done) {
+  it('prevent remote call if the accessToken is missing and required', function(done) {
     createTestAppAndRequest(null, done)
       .del('/tests/123')
       .expect(401)
@@ -143,12 +176,42 @@ describe('app.enableAuth()', function() {
       .end(done);
   });
 
+  it('stores token in the context', function(done) {
+    var TestModel = loopback.createModel('TestModel', { base: 'Model' });
+    TestModel.getToken = function(cb) {
+      cb(null, loopback.getCurrentContext().get('accessToken') || null);
+    };
+    TestModel.remoteMethod('getToken', {
+      returns: { arg: 'token', type: 'object' },
+      http: { verb: 'GET', path: '/token' }
+    });
+
+    var app = loopback();
+    app.model(TestModel, { dataSource: null });
+
+    app.enableAuth();
+    app.use(loopback.context());
+    app.use(loopback.token({ model: Token }));
+    app.use(loopback.rest());
+
+    var token = this.token;
+    request(app)
+      .get('/TestModels/token?_format=json')
+      .set('authorization', token.id)
+      .expect(200)
+      .expect('Content-Type', /json/)
+      .end(function(err, res) {
+        if (err) return done(err);
+        expect(res.body.token.id).to.eql(token.id);
+        done();
+      });
+  });
 });
 
 function createTestingToken(done) {
   var test = this;
-  Token.create({}, function (err, token) {
-    if(err) return done(err);
+  Token.create({}, function(err, token) {
+    if (err) return done(err);
     test.token = token;
     done();
   });
@@ -160,8 +223,8 @@ function createTestAppAndRequest(testToken, settings, done) {
 }
 
 function createTestApp(testToken, settings, done) {
-  done = arguments[arguments.length-1];
-  if(settings == done) settings = {};
+  done = arguments[arguments.length - 1];
+  if (settings == done) settings = {};
   settings = settings || {};
 
   var appSettings = settings.app || {};
@@ -175,11 +238,11 @@ function createTestApp(testToken, settings, done) {
     res.cookie('authorization', testToken.id, {signed: true});
     res.end();
   });
-  app.get('/', function (req, res) {
+  app.get('/', function(req, res) {
     try {
       assert(req.accessToken, 'req should have accessToken');
       assert(req.accessToken.id === testToken.id);
-    } catch(e) {
+    } catch (e) {
       return done(e);
     }
     res.send('ok');
@@ -187,15 +250,15 @@ function createTestApp(testToken, settings, done) {
   app.use(loopback.rest());
   app.enableAuth();
 
-  Object.keys(appSettings).forEach(function(key){
+  Object.keys(appSettings).forEach(function(key) {
     app.set(key, appSettings[key]);
   });
 
   var modelOptions = {
     acls: [
       {
-        principalType: "ROLE",
-        principalId: "$everyone",
+        principalType: 'ROLE',
+        principalId: '$everyone',
         accessType: ACL.ALL,
         permission: ACL.DENY,
         property: 'deleteById'
@@ -203,7 +266,7 @@ function createTestApp(testToken, settings, done) {
     ]
   };
 
-  Object.keys(modelSettings).forEach(function(key){
+  Object.keys(modelSettings).forEach(function(key) {
     modelOptions[key] = modelSettings[key];
   });
 
