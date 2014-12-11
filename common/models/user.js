@@ -543,7 +543,11 @@ module.exports = function(User) {
     UserModel.on('attached', function() {
       UserModel.afterRemote('confirm', function(ctx, inst, next) {
         if (ctx.req) {
-          ctx.res.redirect(ctx.req.param('redirect'));
+          // redirect user if path defined
+          if (ctx.req.param('redirect'))
+            ctx.res.redirect(ctx.req.param('redirect'));
+          else
+            ctx.res.sendStatus(200)
         } else {
           next(new Error('transport unsupported'));
         }
