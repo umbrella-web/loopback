@@ -419,7 +419,7 @@ module.exports = function(ACL) {
         }
       });
 
-      async.parallel(inRoleTasks, function(err, results) {
+      async.series(inRoleTasks, function(err, results) {
         if (err) {
           if (callback) callback(err, null);
           return;
