@@ -1,3 +1,7 @@
+# LoopBack
+
+[![Gitter](https://badges.gitter.im/Join%20Chat.svg)](https://gitter.im/strongloop/loopback?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)
+
 LoopBack is a highly-extensible, open-source Node.js framework that enables you to:
 
   * Create dynamic end-to-end REST APIs with little or no coding.
@@ -12,6 +16,10 @@ LoopBack consists of:
   * A library of Node.js modules.
   * [Yeoman](http://yeoman.io/) generators for scaffolding applications.
   * Client SDKs for iOS, Android, and web clients.
+
+LoopBack tools include:
+  * Command-line tool `slc loopback` to create applications, models, data sources, and so on.
+  * StrongLoop Arc, a graphical tool for editing LoopBack applications; and for deploying and monitoring applications.
 
 For more details, see http://loopback.io/.
 
@@ -36,7 +44,11 @@ The LoopBack framework is a set of Node.js modules that you can use independentl
 * [loopback-connector-oracle](https://github.com/strongloop/loopback-connector-oracle)
 * [loopback-connector-mssql](https://github.com/strongloop/loopback-connector-mssql)
 * [loopback-connector-soap](https://github.com/strongloop/loopback-connector-soap)
-* [loopback-connector-atg](https://github.com/strongloop/loopback-connector-atg) 
+* [loopback-connector-atg](https://github.com/strongloop/loopback-connector-atg)
+
+### Community Connectors
+
+The LoopBack community has created and supports a number of additional connectors.  See [Community connectors](http://docs.strongloop.com/display/LB/Community+connectors) for details.
 
 ### Components
 * [loopback-component-push](https://github.com/strongloop/loopback-component-push)
@@ -74,6 +86,7 @@ The LoopBack framework is a set of Node.js modules that you can use independentl
   * [API documentation](http://apidocs.strongloop.com/loopback).
   * [LoopBack Google Group](https://groups.google.com/forum/#!forum/loopbackjs).
   * [GitHub issues](https://github.com/strongloop/loopback/issues).
+  * [Gitter chat](https://gitter.im/strongloop/loopback).
 
 ## Contributing
 

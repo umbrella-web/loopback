@@ -7,11 +7,12 @@ var userMemory = loopback.createDataSource({
 });
 
 describe('User', function() {
-  var validCredentials = {email: 'foo@bar.com', password: 'bar'};
+  var validCredentialsEmail = 'foo@bar.com';
+  var validCredentials = {email: validCredentialsEmail, password: 'bar'};
   var validCredentialsEmailVerified = {email: 'foo1@bar.com', password: 'bar1', emailVerified: true};
   var validCredentialsEmailVerifiedOverREST = {email: 'foo2@bar.com', password: 'bar2', emailVerified: true};
   var validCredentialsWithTTL = {email: 'foo@bar.com', password: 'bar', ttl: 3600};
-  var invalidCredentials = {email: 'foo1@bar.com', password: 'bar1'};
+  var invalidCredentials = {email: 'foo1@bar.com', password: 'invalid'};
   var incompleteCredentials = {password: 'bar1'};
 
   beforeEach(function() {
@@ -78,7 +79,7 @@ describe('User', function() {
         assert.equal(err.details.context, 'user');
         assert.deepEqual(err.details.codes.email, [
           'presence',
-          'format.blank'
+          'format.null'
         ]);
 
         done();
@@ -125,6 +126,7 @@ describe('User', function() {
         User.login({email: 'b@c.com'}, function(err, accessToken) {
           assert(!accessToken, 'should not create a accessToken without a valid password');
           assert(err, 'should not login without a password');
+          assert.equal(err.code, 'LOGIN_FAILED');
           done();
         });
       });
@@ -135,6 +137,45 @@ describe('User', function() {
       assert(u.password !== 'bar');
     });
 
+    describe('custom password hash', function() {
+      var defaultHashPassword;
+      var defaultValidatePassword;
+
+      beforeEach(function() {
+        defaultHashPassword = User.hashPassword;
+        defaultValidatePassword = User.defaultValidatePassword;
+
+        User.hashPassword = function(plain) {
+          return plain.toUpperCase();
+        };
+
+        User.validatePassword = function(plain) {
+          if (!plain || plain.length < 3) {
+            throw new Error('Password must have at least 3 chars');
+          }
+          return true;
+        };
+      });
+
+      afterEach(function() {
+        User.hashPassword = defaultHashPassword;
+      });
+
+      it('Reports invalid password', function() {
+        try {
+          var u = new User({username: 'foo', password: 'aa'});
+          assert(false, 'Error should have been thrown');
+        } catch (e) {
+          // Ignore
+        }
+      });
+
+      it('Hashes the given password', function() {
+        var u = new User({username: 'foo', password: 'bar'});
+        assert(u.password === 'BAR');
+      });
+    });
+
     it('Create a user over REST should remove emailVerified property', function(done) {
       request(app)
         .post('/users')
@@ -142,6 +183,9 @@ describe('User', function() {
         .expect(200)
         .send(validCredentialsEmailVerifiedOverREST)
         .end(function(err, res) {
+          if (err) {
+            return done(err);
+          }
           assert(!res.body.emailVerified);
           done();
         });
@@ -197,6 +241,23 @@ describe('User', function() {
       });
     });
 
+    it('Login should only allow correct credentials', function(done) {
+      User.login(invalidCredentials, function(err, accessToken) {
+        assert(err);
+        assert.equal(err.code, 'LOGIN_FAILED');
+        assert(!accessToken);
+        done();
+      });
+    });
+
+    it('Login a user providing incomplete credentials', function(done) {
+      User.login(incompleteCredentials, function(err, accessToken) {
+        assert(err);
+        assert.equal(err.code, 'USERNAME_EMAIL_REQUIRED');
+        done();
+      });
+    });
+
     it('Login a user over REST by providing credentials', function(done) {
       request(app)
         .post('/users/login')
@@ -204,7 +265,9 @@ describe('User', function() {
         .expect(200)
         .send(validCredentials)
         .end(function(err, res) {
-          if (err) return done(err);
+          if (err) {
+            return done(err);
+          }
           var accessToken = res.body;
 
           assert(accessToken.userId);
@@ -223,6 +286,11 @@ describe('User', function() {
         .expect(401)
         .send(invalidCredentials)
         .end(function(err, res) {
+          if (err) {
+            return done(err);
+          }
+          var errorResponse = res.body.error;
+          assert.equal(errorResponse.code, 'LOGIN_FAILED');
           done();
         });
     });
@@ -234,6 +302,11 @@ describe('User', function() {
         .expect(400)
         .send(incompleteCredentials)
         .end(function(err, res) {
+          if (err) {
+            return done(err);
+          }
+          var errorResponse = res.body.error;
+          assert.equal(errorResponse.code, 'USERNAME_EMAIL_REQUIRED');
           done();
         });
     });
@@ -244,8 +317,13 @@ describe('User', function() {
         .set('Content-Type', null)
         .expect('Content-Type', /json/)
         .expect(400)
-        .send(validCredentials)
+        .send(JSON.stringify(validCredentials))
         .end(function(err, res) {
+          if (err) {
+            return done(err);
+          }
+          var errorResponse = res.body.error;
+          assert.equal(errorResponse.code, 'USERNAME_EMAIL_REQUIRED');
           done();
         });
     });
@@ -257,7 +335,9 @@ describe('User', function() {
         .expect(200)
         .expect('Content-Type', /json/)
         .end(function(err, res) {
-          if (err) return done(err);
+          if (err) {
+            return done(err);
+          }
           var token = res.body;
           expect(token.user, 'body.user').to.not.equal(undefined);
           expect(token.user, 'body.user')
@@ -273,7 +353,9 @@ describe('User', function() {
         .expect(200)
         .expect('Content-Type', /json/)
         .end(function(err, res) {
-          if (err) return done(err);
+          if (err) {
+            return done(err);
+          }
           var token = res.body;
           expect(token.user, 'body.user').to.not.equal(undefined);
           expect(token.user, 'body.user')
@@ -282,15 +364,6 @@ describe('User', function() {
         });
     });
 
-    it('Login should only allow correct credentials', function(done) {
-      User.create({email: 'foo22@bar.com', password: 'bar'}, function(user, err) {
-        User.login({email: 'foo44@bar.com', password: 'bar'}, function(err, accessToken) {
-          assert(err);
-          assert(!accessToken);
-          done();
-        });
-      });
-    });
   });
 
   function assertGoodToken(accessToken) {
@@ -308,9 +381,20 @@ describe('User', function() {
       User.settings.emailVerificationRequired = false;
     });
 
+    it('Require valid and complete credentials for email verification error', function(done) {
+      User.login({ email: validCredentialsEmail }, function(err, accessToken) {
+        // strongloop/loopback#931
+        // error message should be "login failed" and not "login failed as the email has not been verified"
+        assert(err && !/verified/.test(err.message), ('expecting "login failed" error message, received: "' + err.message + '"'));
+        assert.equal(err.code, 'LOGIN_FAILED');
+        done();
+      });
+    });
+
     it('Login a user by without email verification', function(done) {
       User.login(validCredentials, function(err, accessToken) {
         assert(err);
+        assert.equal(err.code, 'LOGIN_FAILED_EMAIL_NOT_VERIFIED');
         done();
       });
     });
@@ -329,12 +413,33 @@ describe('User', function() {
         .expect(200)
         .send(validCredentialsEmailVerified)
         .end(function(err, res) {
-          if (err) return done(err);
+          if (err) {
+            return done(err);
+          }
           var accessToken = res.body;
 
           assertGoodToken(accessToken);
           assert(accessToken.user === undefined);
 
+          done();
+        });
+    });
+
+    it('Login a user over REST require complete and valid credentials for email verification error message', function(done) {
+      request(app)
+        .post('/users/login')
+        .expect('Content-Type', /json/)
+        .expect(401)
+        .send({ email: validCredentialsEmail })
+        .end(function(err, res) {
+          if (err) {
+            return done(err);
+          }
+          // strongloop/loopback#931
+          // error message should be "login failed" and not "login failed as the email has not been verified"
+          var errorResponse = res.body.error;
+          assert(errorResponse && !/verified/.test(errorResponse.message), ('expecting "login failed" error message, received: "' + errorResponse.message + '"'));
+          assert.equal(errorResponse.code, 'LOGIN_FAILED');
           done();
         });
     });
@@ -346,6 +451,11 @@ describe('User', function() {
         .expect(401)
         .send(validCredentials)
         .end(function(err, res) {
+          if (err) {
+            return done(err);
+          }
+          var errorResponse = res.body.error;
+          assert.equal(errorResponse.code, 'LOGIN_FAILED_EMAIL_NOT_VERIFIED');
           done();
         });
     });
@@ -444,6 +554,7 @@ describe('User', function() {
     it('rejects a user by without realm', function(done) {
       User.login(credentialWithoutRealm, function(err, accessToken) {
         assert(err);
+        assert.equal(err.code, 'REALM_REQUIRED');
         done();
       });
     });
@@ -451,6 +562,7 @@ describe('User', function() {
     it('rejects a user by with bad realm', function(done) {
       User.login(credentialWithBadRealm, function(err, accessToken) {
         assert(err);
+        assert.equal(err.code, 'LOGIN_FAILED');
         done();
       });
     });
@@ -458,6 +570,7 @@ describe('User', function() {
     it('rejects a user by with bad pass', function(done) {
       User.login(credentialWithBadPass, function(err, accessToken) {
         assert(err);
+        assert.equal(err.code, 'LOGIN_FAILED');
         done();
       });
     });
@@ -507,6 +620,7 @@ describe('User', function() {
         function(done) {
           User.login(credentialRealmInEmail, function(err, accessToken) {
             assert(err);
+            assert.equal(err.code, 'REALM_REQUIRED');
             done();
           });
         });
@@ -535,7 +649,9 @@ describe('User', function() {
           .expect(200)
           .send({email: 'foo@bar.com', password: 'bar'})
           .end(function(err, res) {
-            if (err) return done(err);
+            if (err) {
+              return done(err);
+            }
             var accessToken = res.body;
 
             assert(accessToken.userId);
@@ -558,7 +674,9 @@ describe('User', function() {
       assert(token);
 
       return function(err) {
-        if (err) return done(err);
+        if (err) {
+          return done(err);
+        }
 
         AccessToken.findById(token, function(err, accessToken) {
           assert(!accessToken, 'accessToken should not exist after logging out');
@@ -647,7 +765,9 @@ describe('User', function() {
           .expect(200)
           .send({email: 'bar@bat.com', password: 'bar'})
           .end(function(err, res) {
-            if (err) return done(err);
+            if (err) {
+              return done(err);
+            }
           });
       });
 
@@ -678,7 +798,9 @@ describe('User', function() {
           .expect(200)
           .send({email: 'bar@bat.com', password: 'bar'})
           .end(function(err, res) {
-            if (err) return done(err);
+            if (err) {
+              return done(err);
+            }
           });
       });
 
@@ -747,7 +869,9 @@ describe('User', function() {
               if (err) {
                 return done(err);
               }
-              assert(res.body.error);
+              var errorResponse = res.body.error;
+              assert(errorResponse);
+              assert.equal(errorResponse.code, 'USER_NOT_FOUND');
               done();
             });
         }, done);
@@ -761,8 +885,12 @@ describe('User', function() {
               + '&redirect=' + encodeURIComponent(options.redirect))
             .expect(400)
             .end(function(err, res) {
-              if (err) return done(err);
-              assert(res.body.error);
+              if (err) {
+                return done(err);
+              }
+              var errorResponse = res.body.error;
+              assert(errorResponse);
+              assert.equal(errorResponse.code, 'INVALID_TOKEN');
               done();
             });
         }, done);
@@ -772,9 +900,18 @@ describe('User', function() {
 
   describe('Password Reset', function() {
     describe('User.resetPassword(options, cb)', function() {
+      var email = 'foo@bar.com';
+
+      it('Requires email address to reset password', function(done) {
+        User.resetPassword({ }, function(err) {
+          assert(err);
+          assert.equal(err.code, 'EMAIL_REQUIRED');
+          done();
+        });
+      });
+
       it('Creates a temp accessToken to allow a user to change password', function(done) {
         var calledBack = false;
-        var email = 'foo@bar.com';
 
         User.resetPassword({
           email: email
@@ -794,6 +931,38 @@ describe('User', function() {
           });
         });
       });
+
+      it('Password reset over REST rejected without email address', function(done) {
+        request(app)
+          .post('/users/reset')
+          .expect('Content-Type', /json/)
+          .expect(400)
+          .send({ })
+          .end(function(err, res) {
+            if (err) {
+              return done(err);
+            }
+            var errorResponse = res.body.error;
+            assert(errorResponse);
+            assert.equal(errorResponse.code, 'EMAIL_REQUIRED');
+            done();
+          });
+      });
+
+      it('Password reset over REST requires email address', function(done) {
+        request(app)
+          .post('/users/reset')
+          .expect('Content-Type', /json/)
+          .expect(204)
+          .send({ email: email })
+          .end(function(err, res) {
+            if (err) {
+              return done(err);
+            }
+            assert.deepEqual(res.body, { });
+            done();
+          });
+      });
     });
   });
 
@@ -806,6 +975,16 @@ describe('User', function() {
     it('exports default AccessToken model', function() {
       expect(User.accessToken, 'User.accessToken').to.be.a('function');
       expect(User.accessToken.modelName, 'modelName').to.eql('AccessToken');
+    });
+  });
+
+  describe('ttl', function() {
+    var User2;
+    beforeEach(function() {
+      User2 = loopback.User.extend('User2', {}, { ttl: 10 });
+    });
+    it('should override ttl setting in based User model', function() {
+      expect(User2.settings.ttl).to.equal(10);
     });
   });
 });

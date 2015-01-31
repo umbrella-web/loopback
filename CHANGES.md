@@ -1,3 +1,153 @@
+2015-01-27, Version 2.11.0
+==========================
+
+ * Document options for persistedmodel.save() (Rand McKinney)
+
+ * Add test case to demonstrate url-encoded http path (Pradnya Baviskar)
+
+ * Fix JSdocs per #888 (crandmck)
+
+ * Add test case for loopback issue #698 (Pradnya Baviskar)
+
+ * Remove usages of deprecated `req.param()` (Miroslav Bajtoš)
+
+ * Add error code property to known error responses. (Ron Edgecomb)
+
+ * test: use 127.0.0.1 instead of localhost (Ryan Graham)
+
+ * Extend AccessToken to parse Basic auth headers (Ryan Graham)
+
+ * tests: fix Bearer token test (Ryan Graham)
+
+ * don't send queries to the DB when no changes are detected (bitmage)
+
+
+2015-01-16, Version 2.10.2
+==========================
+
+ * Make sure EXECUTE access type matches READ or WRITE (Raymond Feng)
+
+
+2015-01-15, Version 2.10.1
+==========================
+
+ * Optimize the creation of handlers for rest (Raymond Feng)
+
+ * Add a link to gitter chat (Raymond Feng)
+
+ * Added context middleware (Rand McKinney)
+
+ * Revert the peer dep change to avoid npm complaints (Raymond Feng)
+
+ * Update strong-remoting dep (Raymond Feng)
+
+ * Allow accessType per remote method (Raymond Feng)
+
+ * Update juggler dep (Raymond Feng)
+
+ * Fix Geo test cases (Raymond Feng)
+
+ * Allow User.hashPassword/validatePassword to be overridden (Raymond Feng)
+
+ * Use User.remoteMethod instead of loopbacks method This is needed for loopback-connector-remote authorization. Addresses https://github.com/strongloop/loopback/issues/622. (Berkeley Martinez)
+
+ * API and REST tests added to ensure complete and valid credentials are supplied for verified error message to be returned  - tests added as suggested and fail under previous version of User model  - strongloop/loopback#931 (Ron Edgecomb)
+
+ * Require valid login credentials before verified email check.  - strongloop/loopback#931. (Ron Edgecomb)
+
+
+2015-01-07, Version 2.8.8
+=========================
+
+
+
+2015-01-07, Version 2.9.0
+=========================
+
+
+
+2015-01-07, Version 2.10.0
+==========================
+
+ * Revert the peer dep change to avoid npm complaints (Raymond Feng)
+
+ * Update strong-remoting dep (Raymond Feng)
+
+ * Allow accessType per remote method (Raymond Feng)
+
+ * Update juggler dep (Raymond Feng)
+
+ * Fix context middleware to preserve domains (Pham Anh Tuan)
+
+ * Fix Geo test cases (Raymond Feng)
+
+ * Allow User.hashPassword/validatePassword to be overridden (Raymond Feng)
+
+ * Additional password reset unit tests for API and REST  - strongloop/loopback#944 (Ron Edgecomb)
+
+ * Small formatting update to have consistency with identical logic in other areas.   - strongloop/loopback#944 (Ron Edgecomb)
+
+ * Simplify the API test for invalidCredentials (removed create), move above REST calls for better grouping of tests   - strongloop/loopback#944 (Ron Edgecomb)
+
+ * Force request to send body as string, this ensures headers aren't automatically set to application/json  - strongloop/loopback#944 (Ron Edgecomb)
+
+ * Ensure error checking logic is in place for all REST calls, expand formatting for consistency with existing instances.  - strongloop/loopback#944 (Ron Edgecomb)
+
+ * Correct invalidCredentials so that it differs from validCredentialsEmailVerified, unit test now passes as desired.  - strongloop/loopback#944 (Ron Edgecomb)
+
+ * Update to demonstrate unit test is actually failing due to incorrect values of invalidCredentials  - strongloop/loopback#944 (Ron Edgecomb)
+
+ * API and REST tests added to ensure complete and valid credentials are supplied for verified error message to be returned  - tests added as suggested and fail under previous version of User model  - strongloop/loopback#931 (Ron Edgecomb)
+
+ * Require valid login credentials before verified email check.  - strongloop/loopback#931. (Ron Edgecomb)
+
+ * fix jscs warning (Clark Wang)
+
+ * fix nestRemoting is nesting hooks from other relations (Clark Wang)
+
+
+2015-01-06, Version 2.8.7
+=========================
+
+ * Change urlNotFound.js to url-not-found.js (Rand McKinney)
+
+ * Add lib/server-app.js (Rand McKinney)
+
+ * package: add versioned sl-blip dependency (Ryan Graham)
+
+ * fix User.settings.ttl can't be overridden in sub model (Clark Wang)
+
+ * Fix Change.getCheckpointModel() giving new models each call (Farid Neshat)
+
+ * Update README.md (Rand McKinney)
+
+
+2014-12-15, Version 2.8.6
+=========================
+
+ * server-app: make _sortLayersByPhase stable (Miroslav Bajtoš)
+
+ * Rework phased middleware, fix several bugs (Miroslav Bajtoš)
+
+
+2014-12-12, Version 2.8.5
+=========================
+
+ * fix jshint errors (Clark Wang)
+
+ * test if cb exists (Clark Wang)
+
+ * fix nested remoting function throwing error will crash app (Clark Wang)
+
+ * Fix bcrypt issues for browserify (Raymond Feng)
+
+
+2014-12-08, Version 2.8.4
+=========================
+
+ * Allow native bcrypt for performance (Raymond Feng)
+
+
 2014-12-08, Version 2.8.3
 =========================
 
@@ -2061,12 +2211,12 @@
  * Update docs for api->project rename. (Michael Schoonmaker)
 
 
-2013-09-12, Version strongloopsuite-1.0.0-5
+2013-09-12, Version strongloopsuite-1.0.0-4
 ===========================================
 
 
 
-2013-09-12, Version strongloopsuite-1.0.0-4
+2013-09-12, Version strongloopsuite-1.0.0-5
 ===========================================
 
  * Update docs for api->project rename. (Michael Schoonmaker)

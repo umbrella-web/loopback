@@ -812,6 +812,7 @@ describe('relations - integration', function() {
       this.get(url).expect(404, function(err, res) {
         expect(res.body.error.status).to.be.equal(404);
         expect(res.body.error.message).to.be.equal('Unknown "todoItem" id "2".');
+        expect(res.body.error.code).to.be.equal('MODEL_NOT_FOUND');
         done();
       });
     });
@@ -1164,11 +1165,26 @@ describe('relations - integration', function() {
         { properties: { text: 'string' }, dataSource: 'db',
         plural: 'notes' }
       );
+      var Chapter = app.model(
+        'Chapter',
+        { properties: { name: 'string' }, dataSource: 'db',
+          plural: 'chapters' }
+      );
       Book.hasMany(Page);
+      Book.hasMany(Chapter);
       Page.hasMany(Note);
+      Chapter.hasMany(Note);
       Image.belongsTo(Book);
 
+      // fake a remote method that match the filter in Model.nestRemoting()
+      Page.prototype['__throw__errors'] = function() {
+        throw new Error('This should not crash the app');
+      };
+
+      Page.remoteMethod('__throw__errors', { isStatic: false, http: { path: '/throws', verb: 'get' } });
+
       Book.nestRemoting('pages');
+      Book.nestRemoting('chapters');
       Image.nestRemoting('book');
 
       expect(Book.prototype['__findById__pages__notes']).to.be.a.function;
@@ -1201,6 +1217,19 @@ describe('relations - integration', function() {
               test.note = note;
               done();
             });
+          });
+        });
+    });
+
+    before(function createChapters(done) {
+      var test = this;
+      test.book.chapters.create({ name: 'Chapter 1' },
+        function(err, chapter) {
+          if (err) return done(err);
+          test.chapter = chapter;
+          chapter.notes.create({ text: 'Chapter Note 1' }, function(err, note) {
+            test.cnote = note;
+            done();
           });
         });
     });
@@ -1245,6 +1274,7 @@ describe('relations - integration', function() {
           expect(res.body.error).to.be.an.object;
           var expected = 'could not find a model with id unknown';
           expect(res.body.error.message).to.equal(expected);
+          expect(res.body.error.code).to.be.equal('MODEL_NOT_FOUND');
           done();
         });
     });
@@ -1293,6 +1323,16 @@ describe('relations - integration', function() {
         });
     });
 
+    it('should nest remote hooks of ModelTo - hasMany findById', function(done) {
+      var test = this;
+      this.get('/api/books/' + test.book.id + '/chapters/' + test.chapter.id + '/notes/' + test.cnote.id)
+        .expect(200, function(err, res) {
+          expect(res.headers['x-before']).to.empty();
+          expect(res.headers['x-after']).to.empty();
+          done();
+        });
+    });
+
     it('should have proper http.path for remoting', function() {
       [app.models.Book, app.models.Image].forEach(function(Model) {
         Model.sharedClass.methods().forEach(function(method) {
@@ -1304,6 +1344,111 @@ describe('relations - integration', function() {
           });
         });
       });
+    });
+
+    it('should catch error if nested function throws', function(done) {
+      var test = this;
+      this.get('/api/books/' + test.book.id + '/pages/' + this.page.id + '/throws')
+        .end(function(err, res) {
+          expect(res.body).to.be.an('object');
+          expect(res.body.error).to.be.an('object');
+          expect(res.body.error.name).to.equal('Error');
+          expect(res.body.error.status).to.equal(500);
+          expect(res.body.error.message).to.equal('This should not crash the app');
+          done();
+        });
+    });
+  });
+
+  describe('hasOne', function() {
+    var cust;
+
+    before(function createCustomer(done) {
+      var test = this;
+      app.models.customer.create({ name: 'John' }, function(err, c) {
+        if (err) {
+          return done(err);
+        }
+        cust = c;
+        done();
+      });
+    });
+
+    after(function(done) {
+      var self = this;
+      this.app.models.customer.destroyAll(function(err) {
+        if (err) {
+          return done(err);
+        }
+        self.app.models.profile.destroyAll(done);
+      });
+    });
+
+    it('should create the referenced model', function(done) {
+      var url = '/api/customers/' + cust.id + '/profile';
+
+      this.post(url)
+        .send({points: 10})
+        .expect(200, function(err, res) {
+          if (err) {
+            return done(err);
+          }
+          expect(res.body.points).to.be.eql(10);
+          expect(res.body.customerId).to.be.eql(cust.id);
+          done();
+        });
+    });
+
+    it('should find the referenced model', function(done) {
+      var url = '/api/customers/' + cust.id + '/profile';
+      this.get(url)
+        .expect(200, function(err, res) {
+          if (err) {
+            return done(err);
+          }
+          expect(res.body.points).to.be.eql(10);
+          expect(res.body.customerId).to.be.eql(cust.id);
+          done();
+        });
+    });
+
+    it('should not create the referenced model twice', function(done) {
+      var url = '/api/customers/' + cust.id + '/profile';
+      this.post(url)
+        .send({points: 20})
+        .expect(500, function(err, res) {
+          done(err);
+        });
+    });
+
+    it('should update the referenced model', function(done) {
+      var url = '/api/customers/' + cust.id + '/profile';
+      this.put(url)
+        .send({points: 100})
+        .expect(200, function(err, res) {
+          if (err) {
+            return done(err);
+          }
+          expect(res.body.points).to.be.eql(100);
+          expect(res.body.customerId).to.be.eql(cust.id);
+          done();
+        });
+    });
+
+    it('should delete the referenced model', function(done) {
+      var url = '/api/customers/' + cust.id + '/profile';
+      this.del(url)
+        .expect(204, function(err, res) {
+          done(err);
+        });
+    });
+
+    it('should not find the referenced model', function(done) {
+      var url = '/api/customers/' + cust.id + '/profile';
+      this.get(url)
+        .expect(404, function(err, res) {
+          done(err);
+        });
     });
   });
 
