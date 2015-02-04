@@ -588,11 +588,11 @@ module.exports = function(User) {
             query && query.redirect !== undefined ? query.redirect :
             undefined;
 
-          // redirect user if path defined
-          if (ctx.req.param('redirect'))
+          if (redirectUrl !== undefined) {
             ctx.res.redirect(redirectUrl);
-          else
-            ctx.res.sendStatus(200)
+          } else {
+            ctx.res.sendStatus(204);
+          }
         } else {
           next(new Error('transport unsupported'));
         }
