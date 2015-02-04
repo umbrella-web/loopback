@@ -1,3 +1,19 @@
+2015-02-03, Version 2.12.1
+==========================
+
+ * Map not found to 404 for hasOne (Raymond Feng)
+
+
+2015-02-03, Version 2.12.0
+==========================
+
+ * Fix the test case (Raymond Feng)
+
+ * Enable remoting for hasOne relations (Raymond Feng)
+
+ * README: add Gitter badge (Miroslav Bajtoš)
+
+
 2015-01-27, Version 2.11.0
 ==========================
 
@@ -43,22 +59,11 @@
 
  * Allow accessType per remote method (Raymond Feng)
 
- * Update juggler dep (Raymond Feng)
-
- * Fix Geo test cases (Raymond Feng)
-
- * Allow User.hashPassword/validatePassword to be overridden (Raymond Feng)
-
  * Use User.remoteMethod instead of loopbacks method This is needed for loopback-connector-remote authorization. Addresses https://github.com/strongloop/loopback/issues/622. (Berkeley Martinez)
 
  * API and REST tests added to ensure complete and valid credentials are supplied for verified error message to be returned  - tests added as suggested and fail under previous version of User model  - strongloop/loopback#931 (Ron Edgecomb)
 
  * Require valid login credentials before verified email check.  - strongloop/loopback#931. (Ron Edgecomb)
-
-
-2015-01-07, Version 2.8.8
-=========================
-
 
 
 2015-01-07, Version 2.9.0
@@ -77,11 +82,19 @@
 
  * Update juggler dep (Raymond Feng)
 
- * Fix context middleware to preserve domains (Pham Anh Tuan)
-
  * Fix Geo test cases (Raymond Feng)
 
  * Allow User.hashPassword/validatePassword to be overridden (Raymond Feng)
+
+ * API and REST tests added to ensure complete and valid credentials are supplied for verified error message to be returned  - tests added as suggested and fail under previous version of User model  - strongloop/loopback#931 (Ron Edgecomb)
+
+ * Require valid login credentials before verified email check.  - strongloop/loopback#931. (Ron Edgecomb)
+
+
+2015-01-07, Version 2.8.8
+=========================
+
+ * Fix context middleware to preserve domains (Pham Anh Tuan)
 
  * Additional password reset unit tests for API and REST  - strongloop/loopback#944 (Ron Edgecomb)
 
@@ -96,10 +109,6 @@
  * Correct invalidCredentials so that it differs from validCredentialsEmailVerified, unit test now passes as desired.  - strongloop/loopback#944 (Ron Edgecomb)
 
  * Update to demonstrate unit test is actually failing due to incorrect values of invalidCredentials  - strongloop/loopback#944 (Ron Edgecomb)
-
- * API and REST tests added to ensure complete and valid credentials are supplied for verified error message to be returned  - tests added as suggested and fail under previous version of User model  - strongloop/loopback#931 (Ron Edgecomb)
-
- * Require valid login credentials before verified email check.  - strongloop/loopback#931. (Ron Edgecomb)
 
  * fix jscs warning (Clark Wang)
 
@@ -1369,14 +1378,6 @@
 
  * 2.0.0-beta1 (Ritchie Martori)
 
- * Bump version (Raymond Feng)
-
- * Add postgresql to the keywords (Raymond Feng)
-
- * updated package.json with SOAP and framework keywords (altsang)
-
- * updated package.json with keywords and updated description (Raymond Feng)
-
  * Make app.datasources unique per app instance (Miroslav Bajtoš)
 
  * Add RC version (Ritchie Martori)
@@ -1442,11 +1443,6 @@
  * Add Change model (Ritchie Martori)
 
 
-2014-05-27, Version 1.8.4
-=========================
-
-
-
 2014-05-27, Version 1.8.5
 =========================
 
@@ -1458,7 +1454,13 @@
 
  * updated package.json with keywords and updated description (Raymond Feng)
 
+
+2014-05-27, Version 1.8.4
+=========================
+
  * Add more keywords (Raymond Feng)
+
+ * Bump version (Raymond Feng)
 
  * app: flatten model config (Miroslav Bajtoš)
 
