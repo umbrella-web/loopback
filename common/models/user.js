@@ -184,7 +184,7 @@ module.exports = function(User) {
     }
 
     self.findOne({where: query}, function(err, user) {
-      var defaultError = new Error('login failed');
+      var defaultError = new Error('Invalid username or password');
       defaultError.statusCode = 401;
       defaultError.code = 'LOGIN_FAILED';
 
@@ -200,7 +200,7 @@ module.exports = function(User) {
             if (self.settings.emailVerificationRequired && !user.emailVerified) {
               // Fail to log in if email verification is not done yet
               debug('User email has not been verified');
-              err = new Error('login failed as the email has not been verified');
+              err = new Error('To login, verify your email first');
               err.statusCode = 401;
               err.code = 'LOGIN_FAILED_EMAIL_NOT_VERIFIED';
               return fn(err);
@@ -453,7 +453,7 @@ module.exports = function(User) {
             }
           });
         } else {
-          var err = new Error('email is invalid');
+          var err = new Error('User with this email is not registered in the system');
           err.statusCode = 400;
           cb(err);
         }
