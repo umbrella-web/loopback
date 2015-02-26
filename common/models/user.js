@@ -62,7 +62,7 @@ module.exports = function(User) {
    * @param {String|Error} err The error string or object
    * @param {AccessToken} token The generated access token object
    */
-  User.prototype.createAccessToken = function(ttl, cb) {
+  User.prototype.createAccessToken = function(ttl, type, cb) {
     var userModel = this.constructor;
     ttl = Math.min(ttl || userModel.settings.ttl, userModel.settings.maxTTL);
     this.accessTokens.create({
@@ -71,8 +71,7 @@ module.exports = function(User) {
        * It is useful when you have multiple Models, based on User.
        * Next, register role resolver, to find and check token owner by model name and userId */
       model: userModel.modelName,
-      /* if ttl is le than 1 day this is reset password token */
-      type: ttl <= 43200 ? 'reset' : 'login'
+      type: type // reset|login
     }, cb);
   };
 
@@ -205,7 +204,7 @@ module.exports = function(User) {
               err.code = 'LOGIN_FAILED_EMAIL_NOT_VERIFIED';
               return fn(err);
             } else {
-              user.createAccessToken(credentials.ttl, function(err, token) {
+              user.createAccessToken(credentials.ttl, 'login' ,function(err, token) {
                 if (err) return fn(err);
                 if (Array.isArray(include) ? include.indexOf('user') !== -1 : include === 'user') {
                   // NOTE(bajtos) We can't set token.user here:
@@ -440,7 +439,7 @@ module.exports = function(User) {
         } else if (user) {
           // create a short lived access token for temp login to change password
           // TODO(ritch) - eventually this should only allow password change
-          user.createAccessToken(ttl, function(err, accessToken) {
+          user.createAccessToken(ttl, 'reset', function(err, accessToken) {
             if (err) {
               cb(err);
             } else {
