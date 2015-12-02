@@ -62,12 +62,16 @@ assert(Role, 'Role model must be defined before ACL model');
  * @property {String} property Name of the property, method, scope, or relation.
  * @property {String} accessType Type of access being granted: one of READ, WRITE, or EXECUTE.
  * @property {String} permission Type of permission granted. One of:
+ *
  *  - ALARM: Generate an alarm, in a system-dependent way, the access specified in the permissions component of the ACL entry.
  *  - ALLOW: Explicitly grants access to the resource.
  *  - AUDIT: Log, in a system-dependent way, the access specified in the permissions component of the ACL entry.
  *  - DENY: Explicitly denies access to the resource.
  * @property {String} principalType Type of the principal; one of: Application, Use, Role.
- * @property {String} principalId ID of the principal - such as appId, userId or roleId
+ * @property {String} principalId ID of the principal - such as appId, userId or roleId.
+ * @property {Object} settings Extends the `Model.settings` object.
+ * @property {String} settings.defaultPermission Default permission setting: ALLOW, DENY, ALARM, or AUDIT. Default is ALLOW.
+ * Set to DENY to prohibit all API access by default.
  *
  * @class ACL
  * @inherits PersistedModel
@@ -84,6 +88,7 @@ module.exports = function(ACL) {
   ACL.DENY = AccessContext.DENY; // Deny
 
   ACL.READ = AccessContext.READ; // Read operation
+  ACL.REPLICATE = AccessContext.REPLICATE; // Replicate (pull) changes
   ACL.WRITE = AccessContext.WRITE; // Write operation
   ACL.EXECUTE = AccessContext.EXECUTE; // Execute operation
 
@@ -105,21 +110,31 @@ module.exports = function(ACL) {
     for (var i = 0; i < props.length; i++) {
       // Shift the score by 4 for each of the properties as the weight
       score = score * 4;
-      var val1 = rule[props[i]] || ACL.ALL;
-      var val2 = req[props[i]] || ACL.ALL;
-      var isMatchingMethodName = props[i] === 'property' && req.methodNames.indexOf(val1) !== -1;
+      var ruleValue = rule[props[i]] || ACL.ALL;
+      var requestedValue = req[props[i]] || ACL.ALL;
+      var isMatchingMethodName = props[i] === 'property' && req.methodNames.indexOf(ruleValue) !== -1;
 
-      // accessType: EXECUTE should match READ or WRITE
-      var isMatchingAccessType = props[i] === 'accessType' &&
-        val1 === ACL.EXECUTE;
+      var isMatchingAccessType = ruleValue === requestedValue;
+      if (props[i] === 'accessType' && !isMatchingAccessType) {
+        switch (ruleValue) {
+          case ACL.EXECUTE:
+            // EXECUTE should match READ, REPLICATE and WRITE
+            isMatchingAccessType = true;
+            break;
+          case ACL.WRITE:
+            // WRITE should match REPLICATE too
+            isMatchingAccessType = requestedValue === ACL.REPLICATE;
+            break;
+        }
+      }
 
-      if (val1 === val2 || isMatchingMethodName || isMatchingAccessType) {
+      if (isMatchingMethodName || isMatchingAccessType) {
         // Exact match
         score += 3;
-      } else if (val1 === ACL.ALL) {
+      } else if (ruleValue === ACL.ALL) {
         // Wildcard match
         score += 2;
-      } else if (val2 === ACL.ALL) {
+      } else if (requestedValue === ACL.ALL) {
         score += 1;
       } else {
         // Doesn't match at all
@@ -252,10 +267,14 @@ module.exports = function(ACL) {
     var staticACLs = [];
     if (modelClass && modelClass.settings.acls) {
       modelClass.settings.acls.forEach(function(acl) {
-        if (!acl.property || acl.property === ACL.ALL || property === acl.property) {
+        var prop = acl.property;
+        // We support static ACL property with array of string values.
+        if (Array.isArray(prop) && prop.indexOf(property) >= 0)
+          prop = property;
+        if (!prop || prop === ACL.ALL || property === prop) {
           staticACLs.push(new ACL({
             model: model,
-            property: acl.property || ACL.ALL,
+            property: prop || ACL.ALL,
             principalType: acl.principalType,
             principalId: acl.principalId, // TODO: Should it be a name?
             accessType: acl.accessType || ACL.ALL,
@@ -362,11 +381,14 @@ module.exports = function(ACL) {
    * @property {String|Model} model The model name or model class.
    * @property {*} id The model instance ID.
    * @property {String} property The property/method/relation name.
-   * @property {String} accessType The access type: READE, WRITE, or EXECUTE.
+   * @property {String} accessType The access type:
+   *   READ, REPLICATE, WRITE, or EXECUTE.
    * @param {Function} callback Callback function
    */
 
   ACL.checkAccessForContext = function(context, callback) {
+    var registry = this.registry;
+
     if (!(context instanceof AccessContext)) {
       context = new AccessContext(context);
     }
@@ -378,7 +400,12 @@ module.exports = function(ACL) {
 
     var methodNames = context.methodNames;
     var propertyQuery = (property === ACL.ALL) ? undefined : {inq: methodNames.concat([ACL.ALL])};
-    var accessTypeQuery = (accessType === ACL.ALL) ? undefined : {inq: [accessType, ACL.ALL]};
+
+    var accessTypeQuery = (accessType === ACL.ALL) ?
+      undefined :
+      (accessType === ACL.REPLICATE) ?
+        {inq: [ACL.REPLICATE, ACL.WRITE, ACL.ALL]} :
+        {inq: [accessType, ACL.ALL]};
 
     var req = new AccessRequest(modelName, property, accessType, ACL.DEFAULT, methodNames);
 
@@ -386,7 +413,7 @@ module.exports = function(ACL) {
     var staticACLs = this.getStaticACLs(model.modelName, property);
 
     var self = this;
-    var roleModel = loopback.getModelByType(Role);
+    var roleModel = registry.getModelByType(Role);
     this.find({where: {model: model.modelName, property: propertyQuery,
       accessType: accessTypeQuery}}, function(err, acls) {
       if (err) {
@@ -428,6 +455,7 @@ module.exports = function(ACL) {
           if (callback) callback(err, null);
           return;
         }
+
         var resolved = self.resolvePermission(effectiveACLs, req);
         if (resolved && resolved.permission === ACL.DEFAULT) {
           resolved.permission = (model && model.settings.defaultPermission) || ACL.ALLOW;
@@ -467,5 +495,77 @@ module.exports = function(ACL) {
       }
       if (callback) callback(null, access.permission !== ACL.DENY);
     });
+  };
+
+  ACL.resolveRelatedModels = function() {
+    if (!this.roleModel) {
+      var reg = this.registry;
+      this.roleModel = reg.getModelByType(loopback.Role);
+      this.roleMappingModel = reg.getModelByType(loopback.RoleMapping);
+      this.userModel = reg.getModelByType(loopback.User);
+      this.applicationModel = reg.getModelByType(loopback.Application);
+    }
+  };
+
+  /**
+   * Resolve a principal by type/id
+   * @param {String} type Principal type - ROLE/APP/USER
+   * @param {String|Number} id Principal id or name
+   * @param {Function} cb Callback function
+   */
+  ACL.resolvePrincipal = function(type, id, cb) {
+    type = type || ACL.ROLE;
+    this.resolveRelatedModels();
+    switch (type) {
+      case ACL.ROLE:
+        this.roleModel.findOne({where: {or: [{name: id}, {id: id}]}}, cb);
+        break;
+      case ACL.USER:
+        this.userModel.findOne(
+          {where: {or: [{username: id}, {email: id}, {id: id}]}}, cb);
+        break;
+      case ACL.APP:
+        this.applicationModel.findOne(
+          {where: {or: [{name: id}, {email: id}, {id: id}]}}, cb);
+        break;
+      default:
+        process.nextTick(function() {
+          var err = new Error('Invalid principal type: ' + type);
+          err.statusCode = 400;
+          cb(err);
+        });
+    }
+  };
+
+  /**
+   * Check if the given principal is mapped to the role
+   * @param {String} principalType Principal type
+   * @param {String|*} principalId Principal id/name
+   * @param {String|*} role Role id/name
+   * @param {Function} cb Callback function
+   */
+  ACL.isMappedToRole = function(principalType, principalId, role, cb) {
+    var self = this;
+    this.resolvePrincipal(principalType, principalId,
+      function(err, principal) {
+        if (err) return cb(err);
+        if (principal != null) {
+          principalId = principal.id;
+        }
+        principalType = principalType || 'ROLE';
+        self.resolvePrincipal('ROLE', role, function(err, role) {
+          if (err || !role) return cb(err, role);
+          self.roleMappingModel.findOne({
+            where: {
+              roleId: role.id,
+              principalType: principalType,
+              principalId: String(principalId)
+            }
+          }, function(err, result) {
+            if (err) return cb(err);
+            return cb(null, !!result);
+          });
+        });
+      });
   };
 };

@@ -1,6 +1,8 @@
 var loopback = require('../');
 var extend = require('util')._extend;
 var Token = loopback.AccessToken.extend('MyToken');
+var ds = loopback.createDataSource({connector: loopback.Memory});
+Token.attachTo(ds);
 var ACL = loopback.ACL;
 
 describe('loopback.token(options)', function() {
@@ -27,6 +29,30 @@ describe('loopback.token(options)', function() {
       .set('X-Access-Token', this.token.id)
       .expect(200)
       .end(done);
+  });
+
+  it('should not search default keys when searchDefaultTokenKeys is false',
+  function(done) {
+    var tokenId = this.token.id;
+    var app = createTestApp(
+      this.token,
+      { token: { searchDefaultTokenKeys: false } },
+      done);
+    var agent = request.agent(app);
+
+    // Set the token cookie
+    agent.get('/token').expect(200).end(function(err, res) {
+      if (err) return done(err);
+
+      // Make a request that sets the token in all places searched by default
+      agent.get('/check-access?access_token=' + tokenId)
+        .set('X-Access-Token', tokenId)
+        .set('authorization', tokenId)
+        // Expect 401 because there is no (non-default) place configured where
+        // the middleware should load the token from
+        .expect(401)
+        .end(done);
+    });
   });
 
   it('should populate req.token from an authorization header with bearer token', function(done) {
@@ -107,6 +133,51 @@ describe('loopback.token(options)', function() {
           .end(done);
       });
   });
+
+  it('should rewrite url for the current user literal at the end without query',
+    function(done) {
+      var app = createTestApp(this.token, done);
+      var id = this.token.id;
+      var userId = this.token.userId;
+      request(app)
+        .get('/users/me')
+        .set('authorization', id)
+        .end(function(err, res) {
+          assert(!err);
+          assert.deepEqual(res.body, {userId: userId});
+          done();
+        });
+    });
+
+  it('should rewrite url for the current user literal at the end with query',
+    function(done) {
+      var app = createTestApp(this.token, done);
+      var id = this.token.id;
+      var userId = this.token.userId;
+      request(app)
+        .get('/users/me?state=1')
+        .set('authorization', id)
+        .end(function(err, res) {
+          assert(!err);
+          assert.deepEqual(res.body, {userId: userId, state: 1});
+          done();
+        });
+    });
+
+  it('should rewrite url for the current user literal in the middle',
+    function(done) {
+      var app = createTestApp(this.token, done);
+      var id = this.token.id;
+      var userId = this.token.userId;
+      request(app)
+        .get('/users/me/1')
+        .set('authorization', id)
+        .end(function(err, res) {
+          assert(!err);
+          assert.deepEqual(res.body, {userId: userId, state: 1});
+          done();
+        });
+    });
 
   it('should skip when req.token is already present', function(done) {
     var tokenStub = { id: 'stub id' };
@@ -284,7 +355,7 @@ describe('app.enableAuth()', function() {
 
 function createTestingToken(done) {
   var test = this;
-  Token.create({}, function(err, token) {
+  Token.create({userId: '123'}, function(err, token) {
     if (err) return done(err);
     test.token = token;
     done();
@@ -303,13 +374,18 @@ function createTestApp(testToken, settings, done) {
 
   var appSettings = settings.app || {};
   var modelSettings = settings.model || {};
+  var tokenSettings = extend({
+    model: Token,
+    currentUserLiteral: 'me'
+  }, settings.token);
 
   var app = loopback();
 
   app.use(loopback.cookieParser('secret'));
-  app.use(loopback.token({model: Token}));
+  app.use(loopback.token(tokenSettings));
   app.get('/token', function(req, res) {
     res.cookie('authorization', testToken.id, {signed: true});
+    res.cookie('access_token', testToken.id, {signed: true});
     res.end();
   });
   app.get('/', function(req, res) {
@@ -320,6 +396,18 @@ function createTestApp(testToken, settings, done) {
       return done(e);
     }
     res.send('ok');
+  });
+  app.get('/check-access', function(req, res) {
+    res.status(req.accessToken ? 200 : 401).end();
+  });
+  app.use('/users/:uid', function(req, res) {
+    var result = {userId: req.params.uid};
+    if (req.query.state) {
+      result.state = req.query.state;
+    } else if (req.url !== '/') {
+      result.state = req.url.substring(1);
+    }
+    res.status(200).send(result);
   });
   app.use(loopback.rest());
   app.enableAuth();

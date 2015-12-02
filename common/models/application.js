@@ -1,4 +1,5 @@
 var assert = require('assert');
+var utils = require('../../lib/utils');
 
 /*!
  * Application management functions
@@ -81,17 +82,26 @@ module.exports = function(Application) {
    * A hook to generate keys before creation
    * @param next
    */
-  Application.beforeCreate = function(next) {
-    var app = this;
+  Application.observe('before save', function(ctx, next) {
+    if (!ctx.instance) {
+      // Partial update - don't generate new keys
+      // NOTE(bajtos) This also means that an atomic updateOrCreate
+      // will not generate keys when a new record is creatd
+      return next();
+    }
+
+    var app = ctx.instance;
     app.created = app.modified = new Date();
-    app.id = generateKey('id', 'md5');
+    if (!app.id) {
+      app.id = generateKey('id', 'md5');
+    }
     app.clientKey = generateKey('client');
     app.javaScriptKey = generateKey('javaScript');
     app.restApiKey = generateKey('restApi');
     app.windowsKey = generateKey('windows');
     app.masterKey = generateKey('master');
     next();
-  };
+  });
 
   /**
    * Register a new application
@@ -108,6 +118,8 @@ module.exports = function(Application) {
       cb = options;
       options = {};
     }
+    cb = cb || utils.createPromiseCallback();
+
     var props = {owner: owner, name: name};
     for (var p in options) {
       if (!(p in props)) {
@@ -115,6 +127,7 @@ module.exports = function(Application) {
       }
     }
     this.create(props, cb);
+    return cb.promise;
   };
 
   /**
@@ -139,6 +152,7 @@ module.exports = function(Application) {
    * @param {Error} err
    */
   Application.resetKeys = function(appId, cb) {
+    cb = cb || utils.createPromiseCallback();
     this.findById(appId, function(err, app) {
       if (err) {
         if (cb) cb(err, app);
@@ -146,6 +160,7 @@ module.exports = function(Application) {
       }
       app.resetKeys(cb);
     });
+    return cb.promise;
   };
 
   /**
@@ -164,10 +179,12 @@ module.exports = function(Application) {
    *
    */
   Application.authenticate = function(appId, key, cb) {
+    cb = cb || utils.createPromiseCallback();
+
     this.findById(appId, function(err, app) {
       if (err || !app) {
-        if (cb) cb(err, null);
-        return;
+        cb(err, null);
+        return cb.promise;
       }
       var result = null;
       var keyNames = ['clientKey', 'javaScriptKey', 'restApiKey', 'windowsKey', 'masterKey'];
@@ -180,7 +197,8 @@ module.exports = function(Application) {
           break;
         }
       }
-      if (cb) cb(null, result);
+      cb(null, result);
     });
+    return cb.promise;
   };
 };

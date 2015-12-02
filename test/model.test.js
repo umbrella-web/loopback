@@ -16,7 +16,7 @@ describe('Model / PersistedModel', function() {
 
   describe('Model.validatesUniquenessOf(property, options)', function() {
     it('Ensure the value for `property` is unique', function(done) {
-      var User = PersistedModel.extend('user', {
+      var User = PersistedModel.extend('ValidatedUser', {
         'first': String,
         'last': String,
         'age': Number,
@@ -66,12 +66,13 @@ describe('Model / PersistedModel', function() {
 
 describe.onServer('Remote Methods', function() {
 
-  var User;
+  var User, Post;
   var dataSource;
   var app;
 
   beforeEach(function() {
     User = PersistedModel.extend('user', {
+      id: { id: true, type: String, defaultFn: 'guid' },
       'first': String,
       'last': String,
       'age': Number,
@@ -83,11 +84,22 @@ describe.onServer('Remote Methods', function() {
       trackChanges: true
     });
 
+    Post = PersistedModel.extend('post', {
+      id: { id: true, type: String, defaultFn: 'guid' },
+      title: String,
+      content: String
+    }, {
+      trackChanges: true
+    });
+
     dataSource = loopback.createDataSource({
       connector: loopback.Memory
     });
 
     User.attachTo(dataSource);
+    Post.attachTo(dataSource);
+
+    User.hasMany(Post);
 
     User.login = function(username, password, fn) {
       if (username === 'foo' && password === 'bar') {
@@ -162,6 +174,63 @@ describe.onServer('Remote Methods', function() {
           done();
         });
     });
+
+    it('Call the findById with filter.fields using HTTP / REST', function(done) {
+      request(app)
+        .post('/users')
+        .send({first: 'x', last: 'y'})
+        .expect('Content-Type', /json/)
+        .expect(200)
+        .end(function(err, res) {
+          if (err) return done(err);
+          var userId = res.body.id;
+          assert(userId);
+          request(app)
+            .get('/users/' + userId + '?filter[fields]=first')
+            .expect('Content-Type', /json/)
+            .expect(200)
+            .end(function(err, res) {
+              if (err) return done(err);
+              assert.equal(res.body.first, 'x', 'first should be x');
+              assert(res.body.last === undefined, 'last should not be present');
+              done();
+            });
+        });
+    });
+
+    it('Call the findById with filter.include using HTTP / REST', function(done) {
+      request(app)
+        .post('/users')
+        .send({first: 'x', last: 'y'})
+        .expect('Content-Type', /json/)
+        .expect(200)
+        .end(function(err, res) {
+          if (err) return done(err);
+          var userId = res.body.id;
+          assert(userId);
+          request(app)
+            .post('/users/' + userId + '/posts')
+            .send({title: 'T1', content: 'C1'})
+            .expect('Content-Type', /json/)
+            .expect(200)
+            .end(function(err, res) {
+              if (err) return done(err);
+              var post = res.body;
+              request(app)
+                .get('/users/' + userId + '?filter[include]=posts')
+                .expect('Content-Type', /json/)
+                .expect(200)
+                .end(function(err, res) {
+                  if (err) return done(err);
+                  assert.equal(res.body.first, 'x', 'first should be x');
+                  assert.equal(res.body.last, 'y', 'last should be y');
+                  assert.deepEqual(post, res.body.posts[0]);
+                  done();
+                });
+            });
+        });
+    });
+
   });
 
   describe('Model.beforeRemote(name, fn)', function() {
@@ -213,6 +282,24 @@ describe.onServer('Remote Methods', function() {
           if (err) return done(err);
           assert(beforeCalled, 'before hook was not called');
           assert(afterCalled, 'after hook was not called');
+          done();
+        });
+    });
+  });
+
+  describe('Model.afterRemoteError(name, fn)', function() {
+    it('runs the function when method fails', function(done) {
+      var actualError = 'hook not called';
+      User.afterRemoteError('login', function(ctx, next) {
+        actualError = ctx.error;
+        next();
+      });
+
+      request(app).get('/users/sign-in?username=bob&password=123')
+        .end(function(err, res) {
+          if (err) return done(err);
+          expect(actualError)
+            .to.have.property('message', 'bad username and password!');
           done();
         });
     });
@@ -482,17 +569,19 @@ describe.onServer('Remote Methods', function() {
   describe('Model._getACLModel()', function() {
     it('should return the subclass of ACL', function() {
       var Model = require('../').Model;
+      var originalValue = Model._ACL();
       var acl = ACL.extend('acl');
       Model._ACL(null); // Reset the ACL class for the base model
       var model = Model._ACL();
+      Model._ACL(originalValue); // Reset the value back
       assert.equal(model, acl);
     });
   });
 
-  describe('PersistelModel remote methods', function() {
+  describe('PersistedModel remote methods', function() {
     it('includes all aliases', function() {
       var app = loopback();
-      var model = PersistedModel.extend('persistedModel');
+      var model = PersistedModel.extend('PersistedModelForAliases');
       app.dataSource('db', { connector: 'memory' });
       app.model(model, { dataSource: 'db' });
 
@@ -500,7 +589,7 @@ describe.onServer('Remote Methods', function() {
       var metadata = app.handler('rest')
         .adapter
         .getClasses()
-        .filter(function(c) { return c.name === 'persistedModel'; })[0];
+        .filter(function(c) { return c.name === model.modelName; })[0];
 
       var methodNames = [];
       metadata.methods.forEach(function(method) {
@@ -509,7 +598,11 @@ describe.onServer('Remote Methods', function() {
       });
 
       expect(methodNames).to.have.members([
-        'destroyAll', 'deleteAll', 'remove',
+        // NOTE(bajtos) These three methods are disabled by default
+        // Because all tests share the same global registry model
+        // and one of the tests was enabling remoting of "destroyAll",
+        // this test was seeing this method (with all aliases) as public
+        // 'destroyAll', 'deleteAll', 'remove',
         'create',
         'upsert', 'updateOrCreate',
         'exists',
@@ -521,8 +614,38 @@ describe.onServer('Remote Methods', function() {
         'destroyById',
         'removeById',
         'count',
-        'prototype.updateAttributes'
+        'prototype.updateAttributes',
+        'createChangeStream'
       ]);
+    });
+  });
+
+  describe('Model.getApp(cb)', function() {
+    var app, TestModel;
+    beforeEach(function setup() {
+      app = loopback();
+      TestModel = loopback.createModel('TestModelForGetApp'); // unique name
+      app.dataSource('db', { connector: 'memory' });
+    });
+
+    it('calls the callback when already attached', function(done) {
+      app.model(TestModel, { dataSource: 'db' });
+      TestModel.getApp(function(err, a) {
+        if (err) return done(err);
+        expect(a).to.equal(app);
+        done();
+      });
+      // fails on time-out when not implemented correctly
+    });
+
+    it('calls the callback after attached', function(done) {
+      TestModel.getApp(function(err, a) {
+        if (err) return done(err);
+        expect(a).to.equal(app);
+        done();
+      });
+      app.model(TestModel, { dataSource: 'db' });
+      // fails on time-out when not implemented correctly
     });
   });
 });

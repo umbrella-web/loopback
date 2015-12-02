@@ -1,5 +1,7 @@
+require('./support');
+var loopback = require('../');
 var User;
-var AccessToken = loopback.AccessToken;
+var AccessToken;
 var MailConnector = require('../lib/connectors/mail');
 
 var userMemory = loopback.createDataSource({
@@ -12,16 +14,25 @@ describe('User', function() {
   var validCredentialsEmailVerified = {email: 'foo1@bar.com', password: 'bar1', emailVerified: true};
   var validCredentialsEmailVerifiedOverREST = {email: 'foo2@bar.com', password: 'bar2', emailVerified: true};
   var validCredentialsWithTTL = {email: 'foo@bar.com', password: 'bar', ttl: 3600};
+  var validCredentialsWithTTLAndScope = {email: 'foo@bar.com', password: 'bar', ttl: 3600, scope: 'all'};
   var invalidCredentials = {email: 'foo1@bar.com', password: 'invalid'};
   var incompleteCredentials = {password: 'bar1'};
 
+  var defaultApp;
+
   beforeEach(function() {
-    User = loopback.User.extend('user');
+    // FIXME: [rfeng] Remove loopback.User.app so that remote hooks don't go
+    // to the wrong app instance
+    defaultApp = loopback.User.app;
+    loopback.User.app = null;
+    User = loopback.User.extend('TestUser', {}, {http: {path: 'test-users'}});
+    AccessToken = loopback.AccessToken.extend('TestAccessToken');
     User.email = loopback.Email.extend('email');
     loopback.autoAttach();
 
     // Update the AccessToken relation to use the subclass of User
-    AccessToken.belongsTo(User);
+    AccessToken.belongsTo(User, {as: 'user', foreignKey: 'userId'});
+    User.hasMany(AccessToken, {as: 'accessTokens', foreignKey: 'userId'});
 
     // allow many User.afterRemote's to be called
     User.setMaxListeners(0);
@@ -30,7 +41,7 @@ describe('User', function() {
 
   beforeEach(function(done) {
     app.enableAuth();
-    app.use(loopback.token());
+    app.use(loopback.token({model: AccessToken}));
     app.use(loopback.rest());
     app.model(User);
 
@@ -40,6 +51,7 @@ describe('User', function() {
   });
 
   afterEach(function(done) {
+    loopback.User.app = defaultApp;
     User.destroyAll(function(err) {
       User.accessToken.destroyAll(done);
     });
@@ -76,7 +88,7 @@ describe('User', function() {
         assert(err);
         assert.equal(err.name, 'ValidationError');
         assert.equal(err.statusCode, 422);
-        assert.equal(err.details.context, 'user');
+        assert.equal(err.details.context, User.modelName);
         assert.deepEqual(err.details.codes.email, [
           'presence',
           'format.null'
@@ -137,13 +149,20 @@ describe('User', function() {
       assert(u.password !== 'bar');
     });
 
+    it('does not hash the password if it\'s already hashed', function() {
+      var u1 = new User({username: 'foo', password: 'bar'});
+      assert(u1.password !== 'bar');
+      var u2 = new User({username: 'foo', password: u1.password});
+      assert(u2.password === u1.password);
+    });
+
     describe('custom password hash', function() {
       var defaultHashPassword;
       var defaultValidatePassword;
 
       beforeEach(function() {
         defaultHashPassword = User.hashPassword;
-        defaultValidatePassword = User.defaultValidatePassword;
+        defaultValidatePassword = User.validatePassword;
 
         User.hashPassword = function(plain) {
           return plain.toUpperCase();
@@ -159,6 +178,7 @@ describe('User', function() {
 
       afterEach(function() {
         User.hashPassword = defaultHashPassword;
+        User.validatePassword = defaultValidatePassword;
       });
 
       it('Reports invalid password', function() {
@@ -178,7 +198,7 @@ describe('User', function() {
 
     it('Create a user over REST should remove emailVerified property', function(done) {
       request(app)
-        .post('/users')
+        .post('/test-users')
         .expect('Content-Type', /json/)
         .expect(200)
         .send(validCredentialsEmailVerifiedOverREST)
@@ -214,6 +234,44 @@ describe('User', function() {
       });
     });
 
+    it('honors default `createAccessToken` implementation', function(done) {
+      User.login(validCredentialsWithTTL, function(err, accessToken) {
+        assert(accessToken.userId);
+        assert(accessToken.id);
+
+        User.findById(accessToken.userId, function(err, user) {
+          user.createAccessToken(120, function(err, accessToken) {
+            assert(accessToken.userId);
+            assert(accessToken.id);
+            assert.equal(accessToken.ttl, 120);
+            assert.equal(accessToken.id.length, 64);
+            done();
+          });
+        });
+      });
+    });
+
+    it('honors default `createAccessToken` implementation - promise variant', function(done) {
+      User.login(validCredentialsWithTTL, function(err, accessToken) {
+        assert(accessToken.userId);
+        assert(accessToken.id);
+
+        User.findById(accessToken.userId, function(err, user) {
+          user.createAccessToken(120)
+            .then(function(accessToken) {
+              assert(accessToken.userId);
+              assert(accessToken.id);
+              assert.equal(accessToken.ttl, 120);
+              assert.equal(accessToken.id.length, 64);
+              done();
+            })
+            .catch(function(err) {
+              done(err);
+            });
+        });
+      });
+    });
+
     it('Login a user using a custom createAccessToken', function(done) {
       var createToken = User.prototype.createAccessToken; // Save the original method
       // Override createAccessToken
@@ -241,6 +299,36 @@ describe('User', function() {
       });
     });
 
+    it('Login a user using a custom createAccessToken with options',
+      function(done) {
+        var createToken = User.prototype.createAccessToken; // Save the original method
+        // Override createAccessToken
+        User.prototype.createAccessToken = function(ttl, options, cb) {
+          // Reduce the ttl by half for testing purpose
+          this.accessTokens.create({ttl: ttl / 2, scopes: options.scope}, cb);
+        };
+        User.login(validCredentialsWithTTLAndScope, function(err, accessToken) {
+          assert(accessToken.userId);
+          assert(accessToken.id);
+          assert.equal(accessToken.ttl, 1800);
+          assert.equal(accessToken.id.length, 64);
+          assert.equal(accessToken.scopes, 'all');
+
+          User.findById(accessToken.userId, function(err, user) {
+            user.createAccessToken(120, {scope: 'default'}, function(err, accessToken) {
+              assert(accessToken.userId);
+              assert(accessToken.id);
+              assert.equal(accessToken.ttl, 60);
+              assert.equal(accessToken.id.length, 64);
+              assert.equal(accessToken.scopes, 'default');
+              // Restore create access token
+              User.prototype.createAccessToken = createToken;
+              done();
+            });
+          });
+        });
+      });
+
     it('Login should only allow correct credentials', function(done) {
       User.login(invalidCredentials, function(err, accessToken) {
         assert(err);
@@ -248,6 +336,19 @@ describe('User', function() {
         assert(!accessToken);
         done();
       });
+    });
+
+    it('Login should only allow correct credentials - promise variant', function(done) {
+      User.login(invalidCredentials)
+        .then(function(accessToken) {
+          assert(!accessToken);
+          done();
+        })
+        .catch(function(err) {
+          assert(err);
+          assert.equal(err.code, 'LOGIN_FAILED');
+          done();
+        });
     });
 
     it('Login a user providing incomplete credentials', function(done) {
@@ -258,9 +359,22 @@ describe('User', function() {
       });
     });
 
+    it('Login a user providing incomplete credentials - promise variant', function(done) {
+      User.login(incompleteCredentials)
+        .then(function(accessToken) {
+          assert(!accessToken);
+          done();
+        })
+        .catch(function(err) {
+          assert(err);
+          assert.equal(err.code, 'USERNAME_EMAIL_REQUIRED');
+          done();
+        });
+    });
+
     it('Login a user over REST by providing credentials', function(done) {
       request(app)
-        .post('/users/login')
+        .post('/test-users/login')
         .expect('Content-Type', /json/)
         .expect(200)
         .send(validCredentials)
@@ -281,7 +395,7 @@ describe('User', function() {
 
     it('Login a user over REST by providing invalid credentials', function(done) {
       request(app)
-        .post('/users/login')
+        .post('/test-users/login')
         .expect('Content-Type', /json/)
         .expect(401)
         .send(invalidCredentials)
@@ -297,7 +411,7 @@ describe('User', function() {
 
     it('Login a user over REST by providing incomplete credentials', function(done) {
       request(app)
-        .post('/users/login')
+        .post('/test-users/login')
         .expect('Content-Type', /json/)
         .expect(400)
         .send(incompleteCredentials)
@@ -313,7 +427,7 @@ describe('User', function() {
 
     it('Login a user over REST with the wrong Content-Type', function(done) {
       request(app)
-        .post('/users/login')
+        .post('/test-users/login')
         .set('Content-Type', null)
         .expect('Content-Type', /json/)
         .expect(400)
@@ -330,7 +444,7 @@ describe('User', function() {
 
     it('Returns current user when `include` is `USER`', function(done) {
       request(app)
-        .post('/users/login?include=USER')
+        .post('/test-users/login?include=USER')
         .send(validCredentials)
         .expect(200)
         .expect('Content-Type', /json/)
@@ -348,7 +462,7 @@ describe('User', function() {
 
     it('should handle multiple `include`', function(done) {
       request(app)
-        .post('/users/login?include=USER&include=Post')
+        .post('/test-users/login?include=USER&include=Post')
         .send(validCredentials)
         .expect(200)
         .expect('Content-Type', /json/)
@@ -391,12 +505,38 @@ describe('User', function() {
       });
     });
 
+    it('Require valid and complete credentials for email verification error - promise variant', function(done) {
+      User.login({ email: validCredentialsEmail })
+        .then(function(accessToken) {
+        done();
+      })
+      .catch(function(err) {
+        // strongloop/loopback#931
+        // error message should be "login failed" and not "login failed as the email has not been verified"
+        assert(err && !/verified/.test(err.message), ('expecting "login failed" error message, received: "' + err.message + '"'));
+        assert.equal(err.code, 'LOGIN_FAILED');
+        done();
+      });
+    });
+
     it('Login a user by without email verification', function(done) {
       User.login(validCredentials, function(err, accessToken) {
         assert(err);
         assert.equal(err.code, 'LOGIN_FAILED_EMAIL_NOT_VERIFIED');
         done();
       });
+    });
+
+    it('Login a user by without email verification - promise variant', function(done) {
+      User.login(validCredentials)
+        .then(function(err, accessToken) {
+          done();
+        })
+        .catch(function(err) {
+          assert(err);
+          assert.equal(err.code, 'LOGIN_FAILED_EMAIL_NOT_VERIFIED');
+          done();
+        });
     });
 
     it('Login a user by with email verification', function(done) {
@@ -406,9 +546,20 @@ describe('User', function() {
       });
     });
 
+    it('Login a user by with email verification - promise variant', function(done) {
+      User.login(validCredentialsEmailVerified)
+        .then(function(accessToken) {
+          assertGoodToken(accessToken);
+          done();
+        })
+        .catch(function(err) {
+          done(err);
+        });
+    });
+
     it('Login a user over REST when email verification is required', function(done) {
       request(app)
-        .post('/users/login')
+        .post('/test-users/login')
         .expect('Content-Type', /json/)
         .expect(200)
         .send(validCredentialsEmailVerified)
@@ -427,7 +578,7 @@ describe('User', function() {
 
     it('Login a user over REST require complete and valid credentials for email verification error message', function(done) {
       request(app)
-        .post('/users/login')
+        .post('/test-users/login')
         .expect('Content-Type', /json/)
         .expect(401)
         .send({ email: validCredentialsEmail })
@@ -446,7 +597,7 @@ describe('User', function() {
 
     it('Login a user over REST without email verification when it is required', function(done) {
       request(app)
-        .post('/users/login')
+        .post('/test-users/login')
         .expect('Content-Type', /json/)
         .expect(401)
         .send(validCredentials)
@@ -474,8 +625,8 @@ describe('User', function() {
       loopback.autoAttach();
 
       // Update the AccessToken relation to use the subclass of User
-      AccessToken.belongsTo(User);
-      User.hasMany(AccessToken);
+      AccessToken.belongsTo(User, {as: 'user', foreignKey: 'userId'});
+      User.hasMany(AccessToken, {as: 'accessTokens', foreignKey: 'userId'});
 
       // allow many User.afterRemote's to be called
       User.setMaxListeners(0);
@@ -640,11 +791,27 @@ describe('User', function() {
       }
     });
 
+    it('Logout a user by providing the current accessToken id (using node) - promise variant', function(done) {
+      login(logout);
+
+      function login(fn) {
+        User.login({email: 'foo@bar.com', password: 'bar'}, fn);
+      }
+
+      function logout(err, accessToken) {
+        User.logout(accessToken.id)
+          .then(function() {
+            verify(accessToken.id, done);
+          })
+          .catch(done(err));
+      }
+    });
+
     it('Logout a user by providing the current accessToken id (over rest)', function(done) {
       login(logout);
       function login(fn) {
         request(app)
-          .post('/users/login')
+          .post('/test-users/login')
           .expect('Content-Type', /json/)
           .expect(200)
           .send({email: 'foo@bar.com', password: 'bar'})
@@ -663,7 +830,7 @@ describe('User', function() {
 
       function logout(err, token) {
         request(app)
-          .post('/users/logout')
+          .post('/test-users/logout')
           .set('Authorization', token)
           .expect(204)
           .end(verify(token, done));
@@ -693,6 +860,18 @@ describe('User', function() {
         assert(isMatch, 'password doesnt match');
         done();
       });
+    });
+
+    it('Determine if the password matches the stored password - promise variant', function(done) {
+      var u = new User({username: 'foo', password: 'bar'});
+      u.hasPassword('bar')
+        .then(function(isMatch) {
+          assert(isMatch, 'password doesnt match');
+          done();
+        })
+        .catch(function(err) {
+          done(err);
+        });
     });
 
     it('should match a password when saved', function(done) {
@@ -753,17 +932,58 @@ describe('User', function() {
             assert(result.email.response);
             assert(result.token);
             var msg = result.email.response.toString('utf-8');
-            assert(~msg.indexOf('/api/users/confirm'));
+            assert(~msg.indexOf('/api/test-users/confirm'));
             assert(~msg.indexOf('To: bar@bat.com'));
             done();
           });
         });
 
         request(app)
-          .post('/users')
+          .post('/test-users')
           .expect('Content-Type', /json/)
           .expect(200)
           .send({email: 'bar@bat.com', password: 'bar'})
+          .end(function(err, res) {
+            if (err) {
+              return done(err);
+            }
+          });
+      });
+
+      it('Verify a user\'s email address - promise variant', function(done) {
+        User.afterRemote('create', function(ctx, user, next) {
+          assert(user, 'afterRemote should include result');
+
+          var options = {
+            type: 'email',
+            to: user.email,
+            from: 'noreply@myapp.org',
+            redirect: '/',
+            protocol: ctx.req.protocol,
+            host: ctx.req.get('host')
+          };
+
+          user.verify(options)
+            .then(function(result) {
+              console.log('here in then function');
+              assert(result.email);
+              assert(result.email.response);
+              assert(result.token);
+              var msg = result.email.response.toString('utf-8');
+              assert(~msg.indexOf('/api/test-users/confirm'));
+              assert(~msg.indexOf('To: bar@bat.com'));
+              done();
+            })
+            .catch(function(err) {
+              done(err);
+            });
+        });
+
+        request(app)
+          .post('/test-users')
+          .send({email: 'bar@bat.com', password: 'bar'})
+          .expect('Content-Type', /json/)
+          .expect(200)
           .end(function(err, res) {
             if (err) {
               return done(err);
@@ -793,7 +1013,7 @@ describe('User', function() {
         });
 
         request(app)
-          .post('/users')
+          .post('/test-users')
           .expect('Content-Type', /json/)
           .expect(200)
           .send({email: 'bar@bat.com', password: 'bar'})
@@ -802,6 +1022,225 @@ describe('User', function() {
               return done(err);
             }
           });
+      });
+
+      it('Verify a user\'s email address with custom token generator', function(done) {
+        User.afterRemote('create', function(ctx, user, next) {
+          assert(user, 'afterRemote should include result');
+
+          var options = {
+            type: 'email',
+            to: user.email,
+            from: 'noreply@myapp.org',
+            redirect: '/',
+            protocol: ctx.req.protocol,
+            host: ctx.req.get('host'),
+            generateVerificationToken: function(user, cb) {
+              assert(user);
+              assert.equal(user.email, 'bar@bat.com');
+              assert(cb);
+              assert.equal(typeof cb, 'function');
+              // let's ensure async execution works on this one
+              process.nextTick(function() {
+                cb(null, 'token-123456');
+              });
+            }
+          };
+
+          user.verify(options, function(err, result) {
+            assert(result.email);
+            assert(result.email.response);
+            assert(result.token);
+            assert.equal(result.token, 'token-123456');
+            var msg = result.email.response.toString('utf-8');
+            assert(~msg.indexOf('token-123456'));
+            done();
+          });
+        });
+
+        request(app)
+          .post('/test-users')
+          .expect('Content-Type', /json/)
+          .expect(200)
+          .send({email: 'bar@bat.com', password: 'bar'})
+          .end(function(err, res) {
+            if (err) {
+              return done(err);
+            }
+          });
+      });
+
+      it('Fails if custom token generator returns error', function(done) {
+        User.afterRemote('create', function(ctx, user, next) {
+          assert(user, 'afterRemote should include result');
+
+          var options = {
+            type: 'email',
+            to: user.email,
+            from: 'noreply@myapp.org',
+            redirect: '/',
+            protocol: ctx.req.protocol,
+            host: ctx.req.get('host'),
+            generateVerificationToken: function(user, cb) {
+              // let's ensure async execution works on this one
+              process.nextTick(function() {
+                cb(new Error('Fake error'));
+              });
+            }
+          };
+
+          user.verify(options, function(err, result) {
+            assert(err);
+            assert.equal(err.message, 'Fake error');
+            assert.equal(result, undefined);
+            done();
+          });
+        });
+
+        request(app)
+          .post('/test-users')
+          .expect('Content-Type', /json/)
+          .expect(200)
+          .send({email: 'bar@bat.com', password: 'bar'})
+          .end(function(err, res) {
+            if (err) {
+              return done(err);
+            }
+          });
+      });
+
+      describe('Verification link port-squashing', function() {
+        it('Do not squash non-80 ports for HTTP links', function(done) {
+          User.afterRemote('create', function(ctx, user, next) {
+            assert(user, 'afterRemote should include result');
+
+            var options = {
+              type: 'email',
+              to: user.email,
+              from: 'noreply@myapp.org',
+              redirect: '/',
+              protocol: 'http',
+              host: 'myapp.org',
+              port: 3000
+            };
+
+            user.verify(options, function(err, result) {
+              var msg = result.email.response.toString('utf-8');
+              assert(~msg.indexOf('http://myapp.org:3000/'));
+              done();
+            });
+          });
+
+          request(app)
+            .post('/test-users')
+            .expect('Content-Type', /json/)
+            .expect(200)
+            .send({email: 'bar@bat.com', password: 'bar'})
+            .end(function(err, res) {
+              if (err) {
+                return done(err);
+              }
+            });
+        });
+
+        it('Squash port 80 for HTTP links', function(done) {
+          User.afterRemote('create', function(ctx, user, next) {
+            assert(user, 'afterRemote should include result');
+
+            var options = {
+              type: 'email',
+              to: user.email,
+              from: 'noreply@myapp.org',
+              redirect: '/',
+              protocol: 'http',
+              host: 'myapp.org',
+              port: 80
+            };
+
+            user.verify(options, function(err, result) {
+              var msg = result.email.response.toString('utf-8');
+              assert(~msg.indexOf('http://myapp.org/'));
+              done();
+            });
+          });
+
+          request(app)
+            .post('/test-users')
+            .expect('Content-Type', /json/)
+            .expect(200)
+            .send({email: 'bar@bat.com', password: 'bar'})
+            .end(function(err, res) {
+              if (err) {
+                return done(err);
+              }
+            });
+        });
+
+        it('Do not squash non-443 ports for HTTPS links', function(done) {
+          User.afterRemote('create', function(ctx, user, next) {
+            assert(user, 'afterRemote should include result');
+
+            var options = {
+              type: 'email',
+              to: user.email,
+              from: 'noreply@myapp.org',
+              redirect: '/',
+              protocol: 'https',
+              host: 'myapp.org',
+              port: 3000
+            };
+
+            user.verify(options, function(err, result) {
+              var msg = result.email.response.toString('utf-8');
+              assert(~msg.indexOf('https://myapp.org:3000/'));
+              done();
+            });
+          });
+
+          request(app)
+            .post('/test-users')
+            .expect('Content-Type', /json/)
+            .expect(200)
+            .send({email: 'bar@bat.com', password: 'bar'})
+            .end(function(err, res) {
+              if (err) {
+                return done(err);
+              }
+            });
+        });
+
+        it('Squash port 443 for HTTPS links', function(done) {
+          User.afterRemote('create', function(ctx, user, next) {
+            assert(user, 'afterRemote should include result');
+
+            var options = {
+              type: 'email',
+              to: user.email,
+              from: 'noreply@myapp.org',
+              redirect: '/',
+              protocol: 'https',
+              host: 'myapp.org',
+              port: 443
+            };
+
+            user.verify(options, function(err, result) {
+              var msg = result.email.response.toString('utf-8');
+              assert(~msg.indexOf('https://myapp.org/'));
+              done();
+            });
+          });
+
+          request(app)
+            .post('/test-users')
+            .expect('Content-Type', /json/)
+            .expect(200)
+            .send({email: 'bar@bat.com', password: 'bar'})
+            .end(function(err, res) {
+              if (err) {
+                return done(err);
+              }
+            });
+        });
       });
 
     });
@@ -831,7 +1270,7 @@ describe('User', function() {
         });
 
         request(app)
-          .post('/users')
+          .post('/test-users')
           .expect('Content-Type', /json/)
           .expect(302)
           .send({email: 'bar@bat.com', password: 'bar'})
@@ -845,9 +1284,9 @@ describe('User', function() {
       it('Confirm a user verification', function(done) {
         testConfirm(function(result, done) {
           request(app)
-            .get('/users/confirm?uid=' + (result.uid)
-              + '&token=' + encodeURIComponent(result.token)
-              + '&redirect=' + encodeURIComponent(options.redirect))
+            .get('/test-users/confirm?uid=' + (result.uid) +
+              '&token=' + encodeURIComponent(result.token) +
+              '&redirect=' + encodeURIComponent(options.redirect))
             .expect(302)
             .end(function(err, res) {
               if (err) {
@@ -858,12 +1297,34 @@ describe('User', function() {
         }, done);
       });
 
+      it('Should report 302 when redirect url is set', function(done) {
+        testConfirm(function(result, done) {
+          request(app)
+            .get('/test-users/confirm?uid=' + (result.uid) +
+              '&token=' + encodeURIComponent(result.token) +
+              '&redirect=http://foo.com/bar')
+            .expect(302)
+            .expect('Location', 'http://foo.com/bar')
+            .end(done);
+        }, done);
+      });
+
+      it('Should report 204 when redirect url is not set', function(done) {
+        testConfirm(function(result, done) {
+          request(app)
+            .get('/test-users/confirm?uid=' + (result.uid) +
+              '&token=' + encodeURIComponent(result.token))
+            .expect(204)
+            .end(done);
+        }, done);
+      });
+
       it('Report error for invalid user id during verification', function(done) {
         testConfirm(function(result, done) {
           request(app)
-            .get('/users/confirm?uid=' + (result.uid + '_invalid')
-              + '&token=' + encodeURIComponent(result.token)
-              + '&redirect=' + encodeURIComponent(options.redirect))
+            .get('/test-users/confirm?uid=' + (result.uid + '_invalid') +
+               '&token=' + encodeURIComponent(result.token) +
+               '&redirect=' + encodeURIComponent(options.redirect))
             .expect(404)
             .end(function(err, res) {
               if (err) {
@@ -880,9 +1341,9 @@ describe('User', function() {
       it('Report error for invalid token during verification', function(done) {
         testConfirm(function(result, done) {
           request(app)
-            .get('/users/confirm?uid=' + result.uid
-              + '&token=' + encodeURIComponent(result.token) + '_invalid'
-              + '&redirect=' + encodeURIComponent(options.redirect))
+            .get('/test-users/confirm?uid=' + result.uid +
+              '&token=' + encodeURIComponent(result.token) + '_invalid' +
+              '&redirect=' + encodeURIComponent(options.redirect))
             .expect(400)
             .end(function(err, res) {
               if (err) {
@@ -910,6 +1371,27 @@ describe('User', function() {
         });
       });
 
+      it('Requires email address to reset password - promise variant', function(done) {
+        User.resetPassword({ })
+          .then(function() {
+            throw new Error('Error should NOT be thrown');
+          })
+          .catch(function(err) {
+            assert(err);
+            assert.equal(err.code, 'EMAIL_REQUIRED');
+            done();
+          });
+      });
+
+      it('Reports when email is not found', function(done) {
+        User.resetPassword({ email: 'unknown@email.com' }, function(err) {
+          assert(err);
+          assert.equal(err.code, 'EMAIL_NOT_FOUND');
+          assert.equal(err.statusCode, 404);
+          done();
+        });
+      });
+
       it('Creates a temp accessToken to allow a user to change password', function(done) {
         var calledBack = false;
 
@@ -926,6 +1408,7 @@ describe('User', function() {
           assert.equal(info.accessToken.ttl / 60, 15);
           assert(calledBack);
           info.accessToken.user(function(err, user) {
+            if (err) return done(err);
             assert.equal(user.email, email);
             done();
           });
@@ -934,7 +1417,7 @@ describe('User', function() {
 
       it('Password reset over REST rejected without email address', function(done) {
         request(app)
-          .post('/users/reset')
+          .post('/test-users/reset')
           .expect('Content-Type', /json/)
           .expect(400)
           .send({ })
@@ -951,7 +1434,7 @@ describe('User', function() {
 
       it('Password reset over REST requires email address', function(done) {
         request(app)
-          .post('/users/reset')
+          .post('/test-users/reset')
           .expect('Content-Type', /json/)
           .expect(204)
           .send({ email: email })

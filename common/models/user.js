@@ -3,6 +3,7 @@
  */
 
 var loopback = require('../../lib/loopback');
+var utils = require('../../lib/utils');
 var path = require('path');
 var SALT_WORK_FACTOR = 10;
 var crypto = require('crypto');
@@ -38,7 +39,7 @@ var debug = require('debug')('loopback:user');
  * - ALLOW OWNER `deleteById`
  * - ALLOW EVERYONE `login`
  * - ALLOW EVERYONE `logout`
- * - ALLOW EVERYONE `findById`
+ * - ALLOW OWNER `findById`
  * - ALLOW OWNER `updateAttributes`
  *
  * @property {String} username Must be unique
@@ -46,6 +47,17 @@ var debug = require('debug')('loopback:user');
  * @property {String} email Must be valid email
  * @property {Boolean} emailVerified Set when a user's email has been verified via `confirm()`
  * @property {String} verificationToken Set when `verify()` is called
+ * @property {Object} settings Extends the `Model.settings` object.
+ * @property {Boolean} settings.emailVerificationRequired Require the email verification
+ * process before allowing a login.
+ * @property {Number} settings.ttl Default time to live (in seconds) for the `AccessToken` created by `User.login() / user.createAccessToken()`.
+ * Default is `1209600` (2 weeks)
+ * @property {Number} settings.maxTTL The max value a user can request a token to be alive / valid for.
+ * Default is `31556926` (1 year)
+ * @property {Boolean} settings.realmRequired Require a realm when logging in a user.
+ * @property {String} settings.realmDelimiter When set a realm is required.
+ * @property {Number} settings.resetPasswordTokenTTL Time to live for password reset `AccessToken`. Default is `900` (15 minutes).
+ * @property {Number} settings.saltWorkFactor The `bcrypt` salt work factor. Default is `10`.
  *
  * @class User
  * @inherits {PersistedModel}
@@ -58,11 +70,27 @@ module.exports = function(User) {
    * customize how access tokens are generated
    *
    * @param {Number} ttl The requested ttl
-   * @callack {Function} cb The callback function
+   * @param {Object} [options] The options for access token, such as scope, appId
+   * @callback {Function} cb The callback function
    * @param {String|Error} err The error string or object
    * @param {AccessToken} token The generated access token object
    */
-  User.prototype.createAccessToken = function(ttl, type, cb) {
+  User.prototype.createAccessToken = function(ttl, options, cb) {
+    if (cb === undefined && typeof options === 'function') {
+      // createAccessToken(ttl, cb)
+      cb = options;
+      options = undefined;
+    }
+
+    cb = cb || utils.createPromiseCallback();
+
+    if (typeof ttl === 'object' && !options) {
+      // createAccessToken(options, cb)
+      options = ttl;
+      ttl = options.ttl;
+    }
+    options = options || {};
+
     var userModel = this.constructor;
     ttl = Math.min(ttl || userModel.settings.ttl, userModel.settings.maxTTL);
     this.accessTokens.create({
@@ -71,8 +99,10 @@ module.exports = function(User) {
        * It is useful when you have multiple Models, based on User.
        * Next, register role resolver, to find and check token owner by model name and userId */
       model: userModel.modelName,
-      type: type // reset|login
+      type: options.type // reset|login
     }, cb);
+
+    return cb.promise;
   };
 
   function splitPrincipal(name, realmDelimiter) {
@@ -150,6 +180,8 @@ module.exports = function(User) {
       include = undefined;
     }
 
+    fn = fn || utils.createPromiseCallback();
+
     include = (include || '');
     if (Array.isArray(include)) {
       include = include.map(function(val) {
@@ -173,19 +205,35 @@ module.exports = function(User) {
       var err1 = new Error('realm is required');
       err1.statusCode = 400;
       err1.code = 'REALM_REQUIRED';
-      return fn(err1);
+      fn(err1);
+      return fn.promise;
     }
     if (!query.email && !query.username) {
       var err2 = new Error('username or email is required');
       err2.statusCode = 400;
       err2.code = 'USERNAME_EMAIL_REQUIRED';
-      return fn(err2);
+      fn(err2);
+      return fn.promise;
     }
 
     self.findOne({where: query}, function(err, user) {
       var defaultError = new Error('Invalid username or password');
       defaultError.statusCode = 401;
       defaultError.code = 'LOGIN_FAILED';
+
+      function tokenHandler(err, token) {
+        if (err) return fn(err);
+        if (Array.isArray(include) ? include.indexOf('user') !== -1 : include === 'user') {
+          // NOTE(bajtos) We can't set token.user here:
+          //  1. token.user already exists, it's a function injected by
+          //     "AccessToken belongsTo User" relation
+          //  2. ModelBaseClass.toJSON() ignores own properties, thus
+          //     the value won't be included in the HTTP response
+          // See also loopback#161 and loopback#162
+          token.__data.user = user;
+        }
+        fn(err, token);
+      }
 
       if (err) {
         debug('An error is reported from User.findOne: %j', err);
@@ -202,21 +250,15 @@ module.exports = function(User) {
               err = new Error('To login, verify your email first');
               err.statusCode = 401;
               err.code = 'LOGIN_FAILED_EMAIL_NOT_VERIFIED';
-              return fn(err);
+              fn(err);
             } else {
-              user.createAccessToken(credentials.ttl, 'login' ,function(err, token) {
-                if (err) return fn(err);
-                if (Array.isArray(include) ? include.indexOf('user') !== -1 : include === 'user') {
-                  // NOTE(bajtos) We can't set token.user here:
-                  //  1. token.user already exists, it's a function injected by
-                  //     "AccessToken belongsTo User" relation
-                  //  2. ModelBaseClass.toJSON() ignores own properties, thus
-                  //     the value won't be included in the HTTP response
-                  // See also loopback#161 and loopback#162
-                  token.__data.user = user;
-                }
-                fn(err, token);
-              });
+              credentials.type = 'login'; // set access token type
+
+              if (user.createAccessToken.length === 2) {
+                user.createAccessToken(credentials.ttl, tokenHandler);
+              } else {
+                user.createAccessToken(credentials.ttl, credentials, tokenHandler);
+              }
             }
           } else {
             debug('The password is invalid for user %s', query.email || query.username);
@@ -228,6 +270,7 @@ module.exports = function(User) {
         fn(defaultError);
       }
     });
+    return fn.promise;
   };
 
   /**
@@ -245,6 +288,7 @@ module.exports = function(User) {
    */
 
   User.logout = function(tokenId, fn) {
+    fn = fn || utils.createPromiseCallback();
     this.relations.accessTokens.modelTo.findById(tokenId, function(err, accessToken) {
       if (err) {
         fn(err);
@@ -254,6 +298,7 @@ module.exports = function(User) {
         fn(new Error('could not find accessToken'));
       }
     });
+    return fn.promise;
   };
 
   /**
@@ -264,6 +309,7 @@ module.exports = function(User) {
    */
 
   User.prototype.hasPassword = function(plain, fn) {
+    fn = fn || utils.createPromiseCallback();
     if (this.password && plain) {
       bcrypt.compare(plain, this.password, function(err, isMatch) {
         if (err) return fn(err);
@@ -272,6 +318,7 @@ module.exports = function(User) {
     } else {
       fn(null, false);
     }
+    return fn.promise;
   };
 
   /**
@@ -279,11 +326,12 @@ module.exports = function(User) {
    *
    * ```js
    *    var options = {
-  *      type: 'email',
-  *      to: user.email,
-  *      template: 'verify.ejs',
-  *      redirect: '/'
-  *    };
+   *      type: 'email',
+   *      to: user.email,
+   *      template: 'verify.ejs',
+   *      redirect: '/',
+   *      tokenGenerator: function (user, cb) { cb("random-token"); }
+   *    };
    *
    *    user.verify(options, next);
    * ```
@@ -299,16 +347,24 @@ module.exports = function(User) {
    *  page, for example, `'verify.ejs'.
    * @property {String} redirect Page to which user will be redirected after
    *  they verify their email, for example `'/'` for root URI.
+   * @property {Function} generateVerificationToken A function to be used to
+   *  generate the verification token. It must accept the user object and a
+   *  callback function. This function should NOT add the token to the user
+   *  object, instead simply execute the callback with the token! User saving
+   *  and email sending will be handled in the `verify()` method.
    */
 
   User.prototype.verify = function(options, fn) {
+    fn = fn || utils.createPromiseCallback();
+
     var user = this;
     var userModel = this.constructor;
+    var registry = userModel.registry;
     assert(typeof options === 'object', 'options required when calling user.verify()');
     assert(options.type, 'You must supply a verification type (options.type)');
     assert(options.type === 'email', 'Unsupported verification type');
     assert(options.to || this.email, 'Must include options.to when calling user.verify() or the user must have an email property');
-    assert(options.from, 'Must include options.from when calling user.verify() or the user must have an email property');
+    assert(options.from, 'Must include options.from when calling user.verify()');
 
     options.redirect = options.redirect || '/';
     options.template = path.resolve(options.template || path.join(__dirname, '..', '..', 'templates', 'verify.ejs'));
@@ -319,12 +375,17 @@ module.exports = function(User) {
     options.host = options.host || (app && app.get('host')) || 'localhost';
     options.port = options.port || (app && app.get('port')) || 3000;
     options.restApiRoot = options.restApiRoot || (app && app.get('restApiRoot')) || '/api';
+
+    var displayPort = (
+      (options.protocol === 'http' && options.port == '80') ||
+      (options.protocol === 'https' && options.port == '443')
+    ) ? '' : ':' + options.port;
+
     options.verifyHref = options.verifyHref ||
       options.protocol +
       '://' +
       options.host +
-      ':' +
-      options.port +
+      displayPort +
       options.restApiRoot +
       userModel.http.path +
       userModel.sharedClass.find('confirm', true).http.path +
@@ -334,21 +395,22 @@ module.exports = function(User) {
       options.redirect;
 
     // Email model
-    var Email = options.mailer || this.constructor.email || loopback.getModelByType(loopback.Email);
+    var Email = options.mailer || this.constructor.email || registry.getModelByType(loopback.Email);
 
-    crypto.randomBytes(64, function(err, buf) {
-      if (err) {
-        fn(err);
-      } else {
-        user.verificationToken = buf.toString('hex');
-        user.save(function(err) {
-          if (err) {
-            fn(err);
-          } else {
-            sendEmail(user);
-          }
-        });
-      }
+    // Set a default token generation function if one is not provided
+    var tokenGenerator = options.generateVerificationToken || User.generateVerificationToken;
+
+    tokenGenerator(user, function(err, token) {
+      if (err) { return fn(err); }
+
+      user.verificationToken = token;
+      user.save(function(err) {
+        if (err) {
+          fn(err);
+        } else {
+          sendEmail(user);
+        }
+      });
     });
 
     // TODO - support more verification types
@@ -359,15 +421,16 @@ module.exports = function(User) {
 
       options.text = options.text.replace('{href}', options.verifyHref);
 
+      options.to = options.to || user.email;
+
+      options.subject = options.subject || 'Thanks for Registering';
+
+      options.headers = options.headers || {};
+
       var template = loopback.template(options.template);
-      Email.send({
-        to: options.to || user.email,
-        from: options.from,
-        subject: options.subject || 'Thanks for Registering',
-        text: options.text,
-        html: template(options),
-        headers: options.headers || {}
-      }, function(err, email) {
+      options.html = template(options);
+
+      Email.send(options, function(err, email) {
         if (err) {
           fn(err);
         } else {
@@ -375,6 +438,23 @@ module.exports = function(User) {
         }
       });
     }
+    return fn.promise;
+  };
+
+  /**
+   * A default verification token generator which accepts the user the token is
+   * being generated for and a callback function to indicate completion.
+   * This one uses the crypto library and 64 random bytes (converted to hex)
+   * for the token. When used in combination with the user.verify() method this
+   * function will be called with the `user` object as it's context (`this`).
+   *
+   * @param {object} user The User this token is being generated for.
+   * @param {Function} cb The generator must pass back the new token with this function call
+   */
+  User.generateVerificationToken = function(user, cb) {
+    crypto.randomBytes(64, function(err, buf) {
+      cb(err, buf && buf.toString('hex'));
+    });
   };
 
   /**
@@ -387,6 +467,7 @@ module.exports = function(User) {
    * @param {Error} err
    */
   User.confirm = function(uid, token, redirect, fn) {
+    fn = fn || utils.createPromiseCallback();
     this.findById(uid, function(err, user) {
       if (err) {
         fn(err);
@@ -415,6 +496,7 @@ module.exports = function(User) {
         }
       }
     });
+    return fn.promise;
   };
 
   /**
@@ -428,41 +510,45 @@ module.exports = function(User) {
    */
 
   User.resetPassword = function(options, cb) {
+    cb = cb || utils.createPromiseCallback();
     var UserModel = this;
     var ttl = UserModel.settings.resetPasswordTokenTTL || DEFAULT_RESET_PW_TTL;
 
     options = options || {};
-    if (typeof options.email === 'string') {
-      UserModel.findOne({ where: {email: options.email} }, function(err, user) {
-        if (err) {
-          cb(err);
-        } else if (user) {
-          // create a short lived access token for temp login to change password
-          // TODO(ritch) - eventually this should only allow password change
-          user.createAccessToken(ttl, 'reset', function(err, accessToken) {
-            if (err) {
-              cb(err);
-            } else {
-              cb();
-              UserModel.emit('resetPasswordRequest', {
-                email: options.email,
-                accessToken: accessToken,
-                user: user
-              });
-            }
-          });
-        } else {
-          var err = new Error('User with this email is not registered in the system');
-          err.statusCode = 400;
-          cb(err);
-        }
-      });
-    } else {
-      var err = new Error('email is required');
+    if (typeof options.email !== 'string') {
+      var err = new Error('Email is required');
       err.statusCode = 400;
       err.code = 'EMAIL_REQUIRED';
       cb(err);
+      return cb.promise;
     }
+
+    UserModel.findOne({ where: {email: options.email} }, function(err, user) {
+      if (err) {
+        return cb(err);
+      }
+      if (!user) {
+        err = new Error('Email not found');
+        err.statusCode = 404;
+        err.code = 'EMAIL_NOT_FOUND';
+        return cb(err);
+      }
+      // create a short lived access token for temp login to change password
+      // TODO(ritch) - eventually this should only allow password change
+      user.accessTokens.create({ ttl: ttl, type: 'reset', model: user.constructor.modelName }, function(err, accessToken) {
+        if (err) {
+          return cb(err);
+        }
+        cb();
+        UserModel.emit('resetPasswordRequest', {
+          email: options.email,
+          accessToken: accessToken,
+          user: user
+        });
+      });
+    });
+
+    return cb.promise;
   };
 
   /*!
@@ -497,7 +583,16 @@ module.exports = function(User) {
     this.settings.ttl = this.settings.loginAccessTokenTTL || DEFAULT_TTL;
 
     UserModel.setter.password = function(plain) {
-      this.$password = this.constructor.hashPassword(plain);
+      if (typeof plain !== 'string') {
+        return;
+      }
+      if (plain.indexOf('$2a$') === 0 && plain.length === 60) {
+        // The password is already hashed. It can be the case
+        // when the instance is loaded from DB
+        this.$password = plain;
+      } else {
+        this.$password = this.constructor.hashPassword(plain);
+      }
     };
 
     // Make sure emailVerified is not set by creation
@@ -512,10 +607,10 @@ module.exports = function(User) {
     UserModel.remoteMethod(
       'login',
       {
-        description: 'Login a user with username/email and password',
+        description: 'Login a user with username/email and password.',
         accepts: [
           {arg: 'credentials', type: 'object', required: true, http: {source: 'body'}},
-          {arg: 'include', type: 'string', http: {source: 'query' },
+          {arg: 'include', type: ['string'], http: {source: 'query' },
             description: 'Related objects to include in the response. ' +
             'See the description of return value for more details.'}
         ],
@@ -534,7 +629,7 @@ module.exports = function(User) {
     UserModel.remoteMethod(
       'logout',
       {
-        description: 'Logout a user with access token',
+        description: 'Logout a user with access token.',
         accepts: [
           {arg: 'access_token', type: 'string', required: true, http: function(ctx) {
             var req = ctx && ctx.req;
@@ -553,7 +648,7 @@ module.exports = function(User) {
     UserModel.remoteMethod(
       'confirm',
       {
-        description: 'Confirm a user registration with email verification token',
+        description: 'Confirm a user registration with email verification token.',
         accepts: [
           {arg: 'uid', type: 'string', required: true},
           {arg: 'token', type: 'string', required: true},
@@ -566,7 +661,7 @@ module.exports = function(User) {
     UserModel.remoteMethod(
       'resetPassword',
       {
-        description: 'Reset password for a user with email',
+        description: 'Reset password for a user with email.',
         accepts: [
           {arg: 'options', type: 'object', required: true, http: {source: 'body'}}
         ],
@@ -574,28 +669,15 @@ module.exports = function(User) {
       }
     );
 
-    UserModel.on('attached', function() {
-      UserModel.afterRemote('confirm', function(ctx, inst, next) {
-        if (ctx.req) {
-          // replacement for deprecated req.param()
-          var params = ctx.req.params;
-          var body = ctx.req.body;
-          var query = ctx.req.query;
-          var redirectUrl =
-            params && params.redirect !== undefined ? params.redirect :
-            body && body.redirect !== undefined ? body.redirect :
-            query && query.redirect !== undefined ? query.redirect :
-            undefined;
-
-          if (redirectUrl !== undefined) {
-            ctx.res.redirect(redirectUrl);
-          } else {
-            ctx.res.sendStatus(204);
-          }
-        } else {
-          next(new Error('transport unsupported'));
+    UserModel.afterRemote('confirm', function(ctx, inst, next) {
+      if (ctx.args.redirect !== undefined) {
+        if (!ctx.res) {
+          return next(new Error('The transport does not support HTTP redirects.'));
         }
-      });
+        ctx.res.location(ctx.args.redirect);
+        ctx.res.status(302);
+      }
+      next();
     });
 
     // default models

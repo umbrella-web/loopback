@@ -15,9 +15,12 @@ var DEFAULT_TOKEN_LEN = 64;
  *  - DENY EVERYONE `*`
  *  - ALLOW EVERYONE create
  *
- * @property {String} id Generated token ID
+ * @property {String} id Generated token ID.
  * @property {Number} ttl Time to live in seconds, 2 weeks by default.
- * @property {Date} created When the token was created
+ * @property {Date} created When the token was created.
+ * @property {Object} settings Extends the `Model.settings` object.
+ * @property {Number} settings.accessTokenIdLength Length of the base64-encoded string access token. Default value is 64.
+ * Increase the length for a more secure access token.
  *
  * @class AccessToken
  * @inherits {PersistedModel}
@@ -62,20 +65,18 @@ module.exports = function(AccessToken) {
   /*!
    * Hook to create accessToken id.
    */
-
-  AccessToken.beforeCreate = function(next, data) {
-    data = data || {};
+  AccessToken.observe('before save', function(ctx, next) {
+    if (!ctx.instance || ctx.instance.id) {
+      // We are running a partial update or the instance already has an id
+      return next();
+    }
 
     AccessToken.createAccessTokenId(function(err, id) {
-      if (err) {
-        next(err);
-      } else {
-        data.id = id;
-
-        next();
-      }
+      if (err) return next(err);
+      ctx.instance.id = id;
+      next();
     });
-  };
+  });
 
   /**
    * Find a token for the given `ServerRequest`.
@@ -168,9 +169,12 @@ module.exports = function(AccessToken) {
     var length;
     var id;
 
-    params = params.concat(['access_token']);
-    headers = headers.concat(['X-Access-Token', 'authorization']);
-    cookies = cookies.concat(['access_token', 'authorization']);
+    // https://github.com/strongloop/loopback/issues/1326
+    if (options.searchDefaultTokenKeys !== false) {
+      params = params.concat(['access_token']);
+      headers = headers.concat(['X-Access-Token', 'authorization']);
+      cookies = cookies.concat(['access_token', 'authorization']);
+    }
 
     for (length = params.length; i < length; i++) {
       var param = params[i];

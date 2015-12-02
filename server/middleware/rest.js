@@ -4,6 +4,7 @@
 
 var loopback = require('../../lib/loopback');
 var async = require('async');
+var deprecate = require('depd')('loopback');
 
 /*!
  * Export the middleware.
@@ -27,11 +28,19 @@ function rest() {
 
   return function restApiHandler(req, res, next) {
     var app = req.app;
+    var registry = app.registry;
 
-    if (req.url === '/routes') {
-      return res.send(app.handler('rest').adapter.allRoutes());
-    } else if (req.url === '/models') {
-      return res.send(app.remotes().toJSON());
+    // added for https://github.com/strongloop/loopback/issues/1134
+    if (app.get('legacyExplorer') !== false) {
+      deprecate(
+        'Routes "/methods" and "/models" are considered dangerous and should not be used.\n' +
+        'Disable them by setting "legacyExplorer=false" in "server/config.json" or via "app.set()".'
+      );
+      if (req.url === '/routes') {
+        return res.send(app.handler('rest').adapter.allRoutes());
+      } else if (req.url === '/models') {
+        return res.send(app.remotes().toJSON());
+      }
     }
 
     if (!handlers) {
@@ -47,14 +56,8 @@ function rest() {
       }
 
       if (app.isAuthEnabled) {
-        // NOTE(bajtos) It would be better to search app.models for a model
-        // of type AccessToken instead of searching all loopback models.
-        // Unfortunately that's not supported now.
-        // Related discussions:
-        // https://github.com/strongloop/loopback/pull/167
-        // https://github.com/strongloop/loopback/commit/f07446a
-        var AccessToken = loopback.getModelByType(loopback.AccessToken);
-        handlers.push(loopback.token({ model: AccessToken }));
+        var AccessToken = registry.getModelByType('AccessToken');
+        handlers.push(loopback.token({ model: AccessToken, app: app }));
       }
 
       handlers.push(function(req, res, next) {

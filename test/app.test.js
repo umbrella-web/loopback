@@ -65,6 +65,62 @@ describe('app', function() {
       });
     });
 
+    it('allows extra handlers on express stack during app.use', function(done) {
+      function handlerThatAddsHandler(name) {
+        app.use(namedHandler('extra-handler'));
+        return namedHandler(name);
+      }
+
+      var myHandler;
+      app.middleware('routes:before',
+        myHandler = handlerThatAddsHandler('my-handler'));
+      var found = app._findLayerByHandler(myHandler);
+      expect(found).to.be.object;
+      expect(myHandler).to.equal(found.handle);
+      expect(found).have.property('phase', 'routes:before');
+      executeMiddlewareHandlers(app, function(err) {
+        if (err) return done(err);
+        expect(steps).to.eql(['my-handler', 'extra-handler']);
+        done();
+      });
+    });
+
+    it('allows handlers to be wrapped as __NR_handler on express stack',
+      function(done) {
+        var myHandler = namedHandler('my-handler');
+        var wrappedHandler = function(req, res, next) {
+          myHandler(req, res, next);
+        };
+        wrappedHandler['__NR_handler'] = myHandler;
+        app.middleware('routes:before', wrappedHandler);
+        var found = app._findLayerByHandler(myHandler);
+        expect(found).to.be.object;
+        expect(found).have.property('phase', 'routes:before');
+        executeMiddlewareHandlers(app, function(err) {
+          if (err) return done(err);
+          expect(steps).to.eql(['my-handler']);
+          done();
+        });
+      });
+
+    it('allows handlers to be wrapped as a property on express stack',
+      function(done) {
+        var myHandler = namedHandler('my-handler');
+        var wrappedHandler = function(req, res, next) {
+          myHandler(req, res, next);
+        };
+        wrappedHandler['__handler'] = myHandler;
+        app.middleware('routes:before', wrappedHandler);
+        var found = app._findLayerByHandler(myHandler);
+        expect(found).to.be.object;
+        expect(found).have.property('phase', 'routes:before');
+        executeMiddlewareHandlers(app, function(err) {
+          if (err) return done(err);
+          expect(steps).to.eql(['my-handler']);
+          done();
+        });
+      });
+
     it('injects error from previous phases into the router', function(done) {
       var expectedError = new Error('expected error');
 
@@ -276,7 +332,7 @@ describe('app', function() {
 
       executeMiddlewareHandlers(app, '/mountpath/test', function(err) {
         if (err) return done(err);
-        expect(mountWasEmitted, 'mountWasEmitted').to.be.true();
+        expect(mountWasEmitted, 'mountWasEmitted').to.be.true;
         expect(data).to.eql({
           mountpath: '/mountpath',
           parent: app
@@ -382,12 +438,29 @@ describe('app', function() {
         params: null
       });
 
+      // This should be triggered with matching verbs
+      app.middlewareFromConfig(handlerFactory, {
+        enabled: true,
+        phase: 'routes:before',
+        methods: ['get', 'head'],
+        params: {x: 1}
+      });
+
+      // This should be skipped as the verb doesn't match
+      app.middlewareFromConfig(handlerFactory, {
+        enabled: true,
+        phase: 'routes:before',
+        methods: ['post'],
+        params: {x: 2}
+      });
+
       executeMiddlewareHandlers(app, function(err) {
         if (err) return done(err);
         expect(steps).to.eql([
           ['before'],
           [expectedConfig],
-          ['after', 2]
+          ['after', 2],
+          [{x: 1}]
         ]);
         done();
       });
@@ -548,6 +621,10 @@ describe('app', function() {
       app.model('MyTestModel', { dataSource: null });
     });
 
+    it('accepts false dataSource', function() {
+      app.model('MyTestModel', { dataSource: false });
+    });
+
     it('should not require dataSource', function() {
       app.model('MyTestModel', {});
     });
@@ -572,7 +649,7 @@ describe('app', function() {
       var Foo = app.models.foo;
       var f = new Foo();
 
-      assert(f instanceof loopback.Model);
+      assert(f instanceof app.registry.getModel('Model'));
     });
 
     it('interprets extra first-level keys as options', function() {
@@ -617,14 +694,15 @@ describe('app', function() {
 
   describe('app.model(ModelCtor, config)', function() {
     it('attaches the model to a datasource', function() {
+      var previousModel = loopback.registry.findModel('TestModel');
       app.dataSource('db', { connector: 'memory' });
-      var TestModel = loopback.Model.extend('TestModel');
-      // TestModel was most likely already defined in a different test,
-      // thus TestModel.dataSource may be already set
-      delete TestModel.dataSource;
 
-      app.model(TestModel, { dataSource: 'db' });
+      if (previousModel) {
+        delete previousModel.dataSource;
+      }
 
+      assert(!previousModel || !previousModel.dataSource);
+      app.model('TestModel', { dataSource: 'db' });
       expect(app.models.TestModel.dataSource).to.equal(app.dataSources.db);
     });
   });
@@ -735,6 +813,34 @@ describe('app', function() {
       app.enableAuth();
       expect(app.isAuthEnabled).to.equal(true);
     });
+
+    it('auto-configures required models to provided dataSource', function() {
+      var AUTH_MODELS = ['User', 'ACL', 'AccessToken', 'Role', 'RoleMapping'];
+      var app = loopback({ localRegistry: true, loadBuiltinModels: true });
+      require('../lib/builtin-models')(app.registry);
+      var db = app.dataSource('db', { connector: 'memory' });
+
+      app.enableAuth({ dataSource: 'db' });
+
+      expect(Object.keys(app.models)).to.include.members(AUTH_MODELS);
+
+      AUTH_MODELS.forEach(function(m) {
+        var Model = app.models[m];
+        expect(Model.dataSource, m + '.dataSource').to.equal(db);
+        expect(Model.shared, m + '.shared').to.equal(m === 'User');
+      });
+    });
+
+    it('detects already configured subclass of a required model', function() {
+      var app = loopback({ localRegistry: true, loadBuiltinModels: true });
+      var db = app.dataSource('db', { connector: 'memory' });
+      var Customer = app.registry.createModel('Customer', {}, { base: 'User' });
+      app.model(Customer, { dataSource: 'db' });
+
+      app.enableAuth({ dataSource: 'db' });
+
+      expect(Object.keys(app.models)).to.not.include('User');
+    });
   });
 
   describe.onServer('app.get(\'/\', loopback.status())', function() {
@@ -782,7 +888,7 @@ describe('app', function() {
   });
 
   describe('app.connector', function() {
-     // any connector will do
+    // any connector will do
     it('adds the connector to the registry', function() {
       app.connector('foo-bar', loopback.Memory);
       expect(app.connectors['foo-bar']).to.equal(loopback.Memory);
