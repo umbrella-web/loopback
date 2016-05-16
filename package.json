@@ -81,7 +81,7 @@
     "karma-phantomjs-launcher": "^0.1.4",
     "karma-script-launcher": "^0.1.0",
     "loopback-boot": "^2.7.0",
-    "loopback-datasource-juggler": "git+https://github.com/umbrella-web/loopback-datasource-juggler.git#develop",
+    "loopback-datasource-juggler": "git+https://github.com/umbrella-web/loopback-datasource-juggler.git#bounce-v3-develop",
     "loopback-testing": "~1.1.0",
     "mocha": "^2.1.0",
     "sinon": "^1.13.0",
