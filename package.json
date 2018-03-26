@@ -50,7 +50,7 @@
     "nodemailer-stub-transport": "^0.1.5",
     "serve-favicon": "^2.2.0",
     "stable": "^0.1.5",
-    "strong-remoting": "git+https://github.com/umbrella-kirill-karpov/strong-remoting.git#bounce-v3-develop",
+    "strong-remoting": "git+https://github.com/umbrella-kirill-karpov/strong-remoting.git#bounce-v5-production",
     "uid2": "0.0.3",
     "underscore.string": "^3.0.3"
   },
@@ -81,7 +81,7 @@
     "karma-phantomjs-launcher": "^0.1.4",
     "karma-script-launcher": "^0.1.0",
     "loopback-boot": "^2.7.0",
-    "loopback-datasource-juggler": "git+https://github.com/umbrella-web/loopback-datasource-juggler.git#develop",
+    "loopback-datasource-juggler": "git+https://github.com/umbrella-web/loopback-datasource-juggler.git#bounce-v5-production",
     "loopback-testing": "~1.1.0",
     "mocha": "^2.1.0",
     "sinon": "^1.13.0",
